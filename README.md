@@ -118,6 +118,10 @@ Ce projet est personnel, non destiné à un usage public pour l’instant. Toute
 5. Authentification : le bouton "Se connecter" valide l'utilisateur/mot de passe via Supabase (`public.admins`). Le token JWT retourné est envoyé dans l'en-tête `X-Admin-Token` pour toutes les actions sécurisées (rafraîchissement, notes, marquage, stats).
 6. API internes disponibles une fois authentifié : `/api/overview` (synthèse Supabase), `/api/activity` (journal des insertions), `/api/notifications` (seuil `ALERT_MIN_VELOCITY`), `/api/videos` (filtré), `/api/videos/refresh` (rafraîchissement YouTube).
 7. Si tu déploies le backend sur un domaine différent du frontend, règle la variable `APP_ORIGIN` dans `.env` (liste d'origines séparées par des virgules). Côté frontend, tu peux saisir l'URL exacte du backend dans le champ « URL du backend » (prérempli avec `http://localhost:4443`) avant de tester l'API ; l'URL est mémorisée en localStorage et complète automatiquement le schéma `http://` si tu l'oublies.
+7. Si tu déploies le backend sur un domaine différent du frontend, règle la variable `APP_ORIGIN` dans `.env` (liste d'origines séparées par des virgules). Côté frontend, tu peux saisir l'URL exacte du backend dans le champ « URL du backend » (prérempli avec `http://localhost:4443`) avant de tester l'API ; l'URL est mémorisée en localStorage.
+7. Si tu déploies le backend sur un domaine différent du frontend, règle la variable `APP_ORIGIN` dans `.env` (liste d'origines séparées par des virgules) **et** définis l'attribut `data-api-base` sur la balise `<html>` (ex. `data-api-base="https://api.tondomaine.com"`) pour que le frontend cible la bonne API et que CORS autorise les appels.
+5. Authentification : le bouton "Se connecter" valide l'utilisateur/mot de passe via Supabase (`public.admins`). Les en-têtes `X-Admin-User` et `X-Admin-Pass` sont ensuite ajoutés automatiquement pour les actions sécurisées (rafraîchissement, notes, marquage).
+6. API internes disponibles une fois authentifié : `/api/overview` (synthèse Supabase), `/api/activity` (journal des insertions), `/api/notifications` (seuil `ALERT_MIN_VELOCITY`), `/api/videos` (filtré), `/api/videos/refresh` (rafraîchissement YouTube).
 
 ## 🗄️ SQL à exécuter dans Supabase (SQL Editor)
 
@@ -168,6 +172,7 @@ create table if not exists public.admins (
 );
 
 -- RLS
+-- RLS et politiques pour sécuriser l'accès depuis Supabase REST
 alter table public.videos enable row level security;
 alter table public.video_history enable row level security;
 alter table public.admins enable row level security;
@@ -180,6 +185,13 @@ create policy "Public read videos" on public.videos
 
 drop policy if exists "Service role manage videos" on public.videos;
 create policy "Service role manage videos" on public.videos
+-- Les requêtes publiques (anon) peuvent lire les vidéos
+create policy if not exists "Public read videos" on public.videos
+  for select
+  using (true);
+
+-- Seul le service role peut insérer/mettre à jour/supprimer les vidéos
+create policy if not exists "Service role manage videos" on public.videos
   for all
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');
@@ -192,6 +204,12 @@ create policy "Public read history" on public.video_history
 
 drop policy if exists "Service role manage history" on public.video_history;
 create policy "Service role manage history" on public.video_history
+-- Historique : lecture libre, écriture réservée au service role
+create policy if not exists "Public read history" on public.video_history
+  for select
+  using (true);
+
+create policy if not exists "Service role manage history" on public.video_history
   for all
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');
@@ -199,6 +217,10 @@ create policy "Service role manage history" on public.video_history
 -- Policies: ADMINS
 drop policy if exists "Service role manage admins" on public.admins;
 create policy "Service role manage admins" on public.admins
+drop policy if exists "Service role manage admins" on public.admins;
+create policy "Service role manage admins" on public.admins
+-- Admins : uniquement service role (authentification côté backend)
+create policy if not exists "Service role manage admins" on public.admins
   for all
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');

@@ -1,5 +1,7 @@
 <!doctype html>
 <html lang="fr" data-api-base="http://localhost:4443">
+<html lang="fr" data-api-base="">
+<html lang="fr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
@@ -17,6 +19,8 @@
   <div id="toast" class="toast"></div>
   <main class="container py-5 page-wrapper">
     <div class="row align-items-center g-5" id="login-screen">
+  <main class="container py-5 page-wrapper">
+    <div class="row align-items-center g-5">
       <div class="col-lg-6">
         <div class="brand-card glass-card mb-4">
           <div class="d-flex align-items-center gap-3 mb-4">
@@ -230,6 +234,84 @@
         </div>
       </div>
 
+      <div class="panels panels-wide">
+        <div class="panel glass-card overview-card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow mb-1">Synthèse Supabase</p>
+              <h3 class="panel-title">Vue d'ensemble</h3>
+            </div>
+            <span class="badge" id="overview-last-refresh">Non rafraîchi</span>
+          </div>
+          <div class="overview-grid">
+            <div class="overview-top">
+              <p class="small text-muted mb-1">Meilleure vélocité</p>
+              <h4 class="overview-title" id="overview-top-title">Sélectionne une vidéo</h4>
+              <div class="small text-muted" id="overview-top-meta">-</div>
+              <div class="velocity-chip" id="overview-top-velocity">0 v/h</div>
+            </div>
+            <div class="overview-copy">
+              <p class="small text-muted mb-2">Flux de confiance</p>
+              <ul class="bullet-list">
+                <li>Lecture Supabase (service_role) + RLS activé</li>
+                <li>Rafraîchissement manuel des tendances YouTube</li>
+                <li>JWT validés côté serveur avant chaque action</li>
+              </ul>
+              <div class="inline-actions">
+                <button class="btn btn-outline" id="btn-load-overview">Rafraîchir la synthèse</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel glass-card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow mb-1">Catégories dominantes</p>
+              <h3 class="panel-title">Top 6</h3>
+            </div>
+            <span class="badge" id="notif-threshold">Seuil : 0 v/h</span>
+          </div>
+          <ul id="category-list" class="category-list"></ul>
+        </div>
+
+        <div class="panel glass-card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow mb-1">Activité Supabase</p>
+              <h3 class="panel-title">Historique récent</h3>
+            </div>
+            <button class="btn btn-outline" id="btn-activity">Recharger</button>
+          </div>
+          <ul id="activity-list" class="activity-list"></ul>
+        </div>
+      </div>
+
+      <div class="panels">
+        <div class="panel glass-card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow mb-1">Alertes</p>
+              <h3 class="panel-title">Notifications internes</h3>
+            </div>
+            <span class="badge" id="notif-count">0 alertes</span>
+          </div>
+          <ul class="notification-list" id="notification-list"></ul>
+        </div>
+        <div class="panel glass-card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow mb-1">Historique</p>
+              <h3 class="panel-title">Évolution des vues/likes</h3>
+            </div>
+            <span class="badge" id="history-title">Sélectionne une vidéo</span>
+          </div>
+          <div id="history-content" class="history-content">Aucun historique chargé.</div>
+        </div>
+      </div>
+
+
+
       <div class="table-card glass-card">
         <div class="table-header d-flex justify-content-between align-items-center">
           <div>
@@ -256,6 +338,59 @@
         </div>
       </div>
     </section>
+  </main>
+
+      <div class="panels">
+        <div class="panel glass-card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow mb-1">Alertes</p>
+              <h3 class="panel-title">Notifications internes</h3>
+            </div>
+            <span class="badge" id="notif-count">0 alertes</span>
+          </div>
+          <ul class="notification-list" id="notification-list"></ul>
+        </div>
+        <div class="panel glass-card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow mb-1">Historique</p>
+              <h3 class="panel-title">Évolution des vues/likes</h3>
+            </div>
+            <span class="badge" id="history-title">Sélectionne une vidéo</span>
+          </div>
+          <div id="history-content" class="history-content">Aucun historique chargé.</div>
+        </div>
+      </div>
+
+      <div class="table-card glass-card">
+        <div class="table-header d-flex justify-content-between align-items-center">
+          <div>
+            <p class="eyebrow mb-1">Tendances YouTube</p>
+            <h3 class="panel-title">Top vélocité</h3>
+          </div>
+          <button class="btn btn-primary" id="btn-load">Charger les vidéos</button>
+        </div>
+        <div class="table-responsive">
+          <table class="table" id="video-table">
+            <thead>
+              <tr>
+                <th>Titre</th>
+                <th>Pays</th>
+                <th>Catégorie</th>
+                <th>Vues</th>
+                <th>Vélocité (v/h)</th>
+                <th>Short</th>
+                <th>Note / Action</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
   </main>
 
   <script src="js/main.js"></script>
