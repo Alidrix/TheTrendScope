@@ -66,19 +66,18 @@ Une application personnelle pour détecter les vidéos **les plus virales** sur 
 
 ```bash
 npm install
-npm run init:db # crée/actualise les tables Supabase et l'admin par défaut (zakamon)
-npm start       # http://localhost:4443
+npm run init:db # upsert l'admin dans Supabase (assure-toi d'avoir exécuté supabase.sql)
+npm start       # http://localhost:4443 (serveur Node + SPA)
 ```
 
 Le tableau de bord web permet :
 - Connexion sécurisée via le **panel d’authentification** (user + mot de passe Supabase).
-- Identifiants par défaut visibles dans l’UI : `zakamon` / `4GS49PFJ$64@Nr*eXEPa9z%4`.
-  - Le formulaire complet est disponible sur `/login` : il vérifie les identifiants Supabase, mémorise l’accès sur l’appareil (localStorage) puis redirige vers le tableau de bord.
-Le tableau de bord React permet :
-- Connexion sécurisée (bouton "Se connecter") avec les identifiants Supabase (`zakamon` / `4GS49PFJ$64@Nr*eXEPa9z%4` par défaut).
-- Filtrage par pays, catégorie, et shorts uniquement.
-- Rafraîchissement des tendances avec YouTube Data API depuis l’UI.
-- Annotation et suivi (note + marquage "utilisée") persistés dans Supabase.
+- Popup verte de succès quand Supabase + JWT sont OK (vérifiés côté serveur).
+- Identifiants par défaut : `zakamon` / `4GS49PFJ$64@Nr*eXEPa9z%4` (injection via supabase.sql ou `npm run init:db`).
+- Filtrage par pays, catégorie, recherche plein texte et shorts uniquement.
+- Rafraîchissement manuel des tendances YouTube (bouton "Rafraîchir (YouTube)") qui upsert les vidéos et l’historique.
+- Annotation et suivi (note + marquage "utilisée") persistés dans Supabase, historisation visible par vidéo.
+- Notifications internes affichant les vidéos à forte vélocité.
 
 ---
 

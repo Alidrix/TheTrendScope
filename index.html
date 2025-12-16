@@ -14,6 +14,9 @@
 </head>
 <body class="img js-fullheight" style="background-image: url(images/bg.jpg);">
   <div class="overlay"></div>
+  <div id="toast" class="toast"></div>
+  <main class="container py-5 page-wrapper">
+    <div class="row align-items-center g-5" id="login-screen">
   <main class="container py-5 page-wrapper">
     <div class="row align-items-center g-5">
       <div class="col-lg-6">
@@ -79,6 +82,123 @@
         </div>
       </div>
     </div>
+
+    <section id="dashboard" class="dashboard d-none">
+      <div class="dashboard-header glass-card">
+        <div class="d-flex align-items-center gap-3">
+          <img src="images/logo.svg" alt="Logo Trend Scope" class="dashboard-logo">
+          <div>
+            <p class="eyebrow mb-1">Tableau de bord</p>
+            <h2 class="brand-title">Trend Scope live</h2>
+            <p class="small text-muted mb-0">Données Supabase + YouTube, rafraîchissement manuel.</p>
+          </div>
+        </div>
+        <div class="actions">
+          <div class="health" id="health-status">
+            <span class="badge status-badge" data-key="supabase">Supabase</span>
+            <span class="badge status-badge" data-key="jwt">JWT</span>
+          </div>
+          <div class="action-buttons">
+            <button class="btn btn-outline" id="btn-refresh">Rafraîchir (YouTube)</button>
+            <button class="btn btn-outline" id="btn-logout">Déconnexion</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="filters glass-card">
+        <div class="filter-group">
+          <label>Pays</label>
+          <select id="filter-country" class="form-control">
+            <option value="FR">France</option>
+            <option value="US">États-Unis</option>
+            <option value="ES">Espagne</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Catégorie</label>
+          <input id="filter-category" class="form-control" type="text" placeholder="Music, Food, Sport…">
+        </div>
+        <div class="filter-group">
+          <label>Recherche</label>
+          <input id="filter-search" class="form-control" type="text" placeholder="Titre ou description">
+        </div>
+        <div class="filter-group checkbox-inline">
+          <label class="checkbox-wrap checkbox-primary">Shorts uniquement
+            <input type="checkbox" id="filter-short">
+            <span class="checkmark"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <div class="stat-card glass-card" id="stat-total">
+          <p class="eyebrow">Tendances</p>
+          <h3 class="stat-value" data-stat="total">0</h3>
+          <p class="small text-muted">Vidéos actives dans la vue filtrée</p>
+        </div>
+        <div class="stat-card glass-card" id="stat-shorts">
+          <p class="eyebrow">Shorts</p>
+          <h3 class="stat-value" data-stat="shorts">0</h3>
+          <p class="small text-muted">Vidéos courtes (&lt; 60s)</p>
+        </div>
+        <div class="stat-card glass-card" id="stat-velocity">
+          <p class="eyebrow">Vélocité moyenne</p>
+          <h3 class="stat-value" data-stat="velocity">0</h3>
+          <p class="small text-muted">Vues / heure</p>
+        </div>
+      </div>
+
+      <div class="panels">
+        <div class="panel glass-card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow mb-1">Alertes</p>
+              <h3 class="panel-title">Notifications internes</h3>
+            </div>
+            <span class="badge" id="notif-count">0 alertes</span>
+          </div>
+          <ul class="notification-list" id="notification-list"></ul>
+        </div>
+        <div class="panel glass-card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow mb-1">Historique</p>
+              <h3 class="panel-title">Évolution des vues/likes</h3>
+            </div>
+            <span class="badge" id="history-title">Sélectionne une vidéo</span>
+          </div>
+          <div id="history-content" class="history-content">Aucun historique chargé.</div>
+        </div>
+      </div>
+
+      <div class="table-card glass-card">
+        <div class="table-header d-flex justify-content-between align-items-center">
+          <div>
+            <p class="eyebrow mb-1">Tendances YouTube</p>
+            <h3 class="panel-title">Top vélocité</h3>
+          </div>
+          <button class="btn btn-primary" id="btn-load">Charger les vidéos</button>
+        </div>
+        <div class="table-responsive">
+          <table class="table" id="video-table">
+            <thead>
+              <tr>
+                <th>Titre</th>
+                <th>Pays</th>
+                <th>Catégorie</th>
+                <th>Vues</th>
+                <th>Vélocité (v/h)</th>
+                <th>Short</th>
+                <th>Note / Action</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
   </main>
 
   <script src="js/main.js"></script>
