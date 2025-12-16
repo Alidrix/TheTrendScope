@@ -66,19 +66,18 @@ Une application personnelle pour détecter les vidéos **les plus virales** sur 
 
 ```bash
 npm install
-npm run init:db # crée/actualise les tables Supabase et l'admin par défaut (zakamon)
-npm start       # http://localhost:4443
+npm run init:db # upsert l'admin dans Supabase (assure-toi d'avoir exécuté supabase.sql)
+npm start       # http://localhost:4443 (serveur Node + SPA)
 ```
 
 Le tableau de bord web permet :
 - Connexion sécurisée via le **panel d’authentification** (user + mot de passe Supabase).
-- Identifiants par défaut visibles dans l’UI : `zakamon` / `4GS49PFJ$64@Nr*eXEPa9z%4`.
-  - Le formulaire complet est disponible sur `/login` : il vérifie les identifiants Supabase, mémorise l’accès sur l’appareil (localStorage) puis redirige vers le tableau de bord.
-Le tableau de bord React permet :
-- Connexion sécurisée (bouton "Se connecter") avec les identifiants Supabase (`zakamon` / `4GS49PFJ$64@Nr*eXEPa9z%4` par défaut).
-- Filtrage par pays, catégorie, et shorts uniquement.
-- Rafraîchissement des tendances avec YouTube Data API depuis l’UI.
-- Annotation et suivi (note + marquage "utilisée") persistés dans Supabase.
+- Popup verte de succès quand Supabase + JWT sont OK (vérifiés côté serveur).
+- Identifiants par défaut : `zakamon` / `4GS49PFJ$64@Nr*eXEPa9z%4` (injection via supabase.sql ou `npm run init:db`).
+- Filtrage par pays, catégorie, recherche plein texte et shorts uniquement.
+- Rafraîchissement manuel des tendances YouTube (bouton "Rafraîchir (YouTube)") qui upsert les vidéos et l’historique.
+- Annotation et suivi (note + marquage "utilisée") persistés dans Supabase, historisation visible par vidéo.
+- Notifications internes affichant les vidéos à forte vélocité.
 
 ---
 
@@ -88,12 +87,17 @@ Ce projet est personnel, non destiné à un usage public pour l’instant. Toute
 
 ## 🏁 Démarrage rapide (prototype Node.js minimal)
 
-1. Copie le fichier `.env.example` en `.env` et ajoute les secrets ci-dessous (ou utilise directement ceux fournis) :
+1. Copie le fichier `.env.example` en `.env` et remplis chaque variable sensible :
    ```env
    SUPABASE_URL=https://ltxjjnzsphhprykuwwye.supabase.co
-   SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0eGpqbnpzcGhocHJ5a3V3d3llIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NDc4ODIwNiwiZXhwIjoyMDgwMzY0MjA2fQ.MTSelIYvHPdV4-6aHua7bHAHBuG6zniNmgLLARePZCs
-   SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0eGpqbnpzcGhocHJ5a3V3d3llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3ODgyMDYsImV4cCI6MjA4MDM2NDIwNn0.AR4MHCGyhBDpX3BTBIqQh0qap6tOLUHfuP8HMofF3Sk
-   YOUTUBE_API_KEY=votre_cle
+   SUPABASE_SERVICE_ROLE_KEY=<ta_clé_service_role>
+   SUPABASE_ANON_KEY=<ta_clé_anon>
+   # JWT utilisés pour signer/vérifier les tokens Supabase
+   JWT_CURRENT_KEY=<jwt_current_key>
+   JWT_STANDBY_KEY=<jwt_standby_key>
+   JWT_LEGACY_SECRET=<jwt_legacy_secret>
+   # API YouTube
+   YOUTUBE_API_KEY=<ta_cle_youtube>
    # Identifiant par défaut injecté dans la table `admins` lors du init:db
    ADMIN_USER=zakamon
    ADMIN_PASSWORD=4GS49PFJ$64@Nr*eXEPa9z%4
@@ -111,11 +115,15 @@ Ce projet est personnel, non destiné à un usage public pour l’instant. Toute
 
 ## 🗄️ SQL à exécuter dans Supabase (SQL Editor)
 
+Un fichier prêt à l'emploi est fourni : [`supabase.sql`](./supabase.sql). Tu peux le coller dans le SQL Editor Supabase ou l'exécuter via `psql` pour créer les tables, activer le RLS et insérer l’admin par défaut.
+
 Les commandes suivantes permettent de créer manuellement toutes les tables utilisées par l’authentification Supabase et le stockage des tendances (à lancer dans le SQL Editor Supabase ou via `psql`) :
 
 ```sql
+-- Extensions
 create extension if not exists "uuid-ossp";
 
+-- Tables
 create table if not exists public.videos (
   id text primary key,
   title text not null,
@@ -153,9 +161,47 @@ create table if not exists public.admins (
   created_at timestamptz default now()
 );
 
+-- RLS
+alter table public.videos enable row level security;
+alter table public.video_history enable row level security;
+alter table public.admins enable row level security;
+
+-- Policies: VIDEOS
+drop policy if exists "Public read videos" on public.videos;
+create policy "Public read videos" on public.videos
+  for select
+  using (true);
+
+drop policy if exists "Service role manage videos" on public.videos;
+create policy "Service role manage videos" on public.videos
+  for all
+  using (auth.role() = 'service_role')
+  with check (auth.role() = 'service_role');
+
+-- Policies: VIDEO_HISTORY
+drop policy if exists "Public read history" on public.video_history;
+create policy "Public read history" on public.video_history
+  for select
+  using (true);
+
+drop policy if exists "Service role manage history" on public.video_history;
+create policy "Service role manage history" on public.video_history
+  for all
+  using (auth.role() = 'service_role')
+  with check (auth.role() = 'service_role');
+
+-- Policies: ADMINS
+drop policy if exists "Service role manage admins" on public.admins;
+create policy "Service role manage admins" on public.admins
+  for all
+  using (auth.role() = 'service_role')
+  with check (auth.role() = 'service_role');
+
+-- Seed / upsert admin
 insert into public.admins (username, password)
 values ('zakamon', '4GS49PFJ$64@Nr*eXEPa9z%4')
-on conflict (username) do update set password = excluded.password;
+on conflict (username) do update
+set password = excluded.password;
 ```
 
 > Remarque : le backend s’appuie sur l’API YouTube pour récupérer les tendances FR/US/ES, calcule la vélocité (vues/h), stocke dans Supabase, et conserve l’historique des vues/likes pour suivre l’évolution. Les actions protégées (rafraîchir, notes, marquage) utilisent uniquement `X-Admin-User` et `X-Admin-Pass`.

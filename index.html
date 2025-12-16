@@ -1,68 +1,202 @@
 <!doctype html>
-<html lang="en">
-  <head>
-  	<title>Login 10</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <title>The Trend Scope | Connexion</title>
+  <meta name="description" content="Tableau de bord The Trend Scope : connexion sécurisée pour suivre les vidéos YouTube les plus virales.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" integrity="sha512-bx1Iev2PXWmBMS2nQomqKgJo0vvArkH5AO9M/dwZ0pniS3pSke1Mt2rt7NmBGG99nmCaTKty+O3O5nQJY6Q3DQ==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="icon" type="image/svg+xml" href="images/logo.svg">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="img js-fullheight" style="background-image: url(images/bg.jpg);">
+  <div class="overlay"></div>
+  <div id="toast" class="toast"></div>
+  <main class="container py-5 page-wrapper">
+    <div class="row align-items-center g-5" id="login-screen">
+      <div class="col-lg-6">
+        <div class="brand-card glass-card mb-4">
+          <div class="d-flex align-items-center gap-3 mb-4">
+            <img src="images/logo.svg" alt="The Trend Scope" class="brand-logo">
+            <div>
+              <p class="eyebrow mb-1">Tableau de bord Supabase</p>
+              <h1 class="brand-title">The Trend Scope</h1>
+              <p class="lead mb-0">Détecteur personnel des vidéos YouTube les plus virales (FR/US/ES).</p>
+            </div>
+          </div>
+          <div class="badges mb-3">
+            <span class="badge rounded-pill text-dark bg-light">YouTube Data API</span>
+            <span class="badge rounded-pill text-dark bg-light">Supabase</span>
+            <span class="badge rounded-pill text-dark bg-light">Auth sécurisée</span>
+          </div>
+          <ul class="feature-list">
+            <li><i class="fa-solid fa-bolt"></i> Détection virale avec vélocité (vues/h) et badge Shorts.</li>
+            <li><i class="fa-solid fa-filter"></i> Filtrage par pays, catégorie et type de contenu.</li>
+            <li><i class="fa-solid fa-chart-line"></i> Historique des vues/likes + notes personnelles synchronisées.</li>
+            <li><i class="fa-solid fa-bell"></i> Notifications internes et rafraîchissement manuel maîtrisé.</li>
+            <li><i class="fa-solid fa-shield-halved"></i> Accès par identifiants Supabase (stockés côté serveur).</li>
+          </ul>
+          <div class="callout mt-3">
+            <p class="mb-1 fw-bold"><i class="fa-solid fa-key"></i> Configuration requise</p>
+            <p class="mb-0 small">Ajoute tes clés <code>SUPABASE_URL</code>, <code>SUPABASE_ANON_KEY</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code> et <code>YOUTUBE_API_KEY</code> dans un fichier <code>.env</code> avant de lancer <code>npm run init:db</code> puis <code>npm start</code>.</p>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-5 offset-lg-1">
+        <div class="login-wrap glass-card p-4">
+          <div class="text-center mb-4">
+            <img src="images/logo.svg" alt="Logo The Trend Scope" class="login-logo mb-3">
+            <h2 class="heading-section">Connexion sécurisée</h2>
+            <p class="text-muted mb-0">Les identifiants sont vérifiés côté Supabase avant d'accéder au tableau de bord.</p>
+          </div>
+          <form id="login-form" class="signin-form">
+            <div class="form-group mb-3">
+              <label for="username" class="form-label">Nom d'utilisateur</label>
+              <input id="username" type="text" class="form-control" name="username" placeholder="Admin Supabase" required autocomplete="username">
+            </div>
+            <div class="form-group mb-3 position-relative">
+              <label for="password" class="form-label">Mot de passe</label>
+              <input id="password" type="password" class="form-control" name="password" placeholder="Mot de passe sécurisé" required autocomplete="current-password">
+              <button type="button" class="field-icon" data-toggle="password" data-target="#password" aria-label="Afficher ou masquer le mot de passe">
+                <i class="fa-solid fa-eye"></i>
+              </button>
+            </div>
+            <div class="form-group d-flex justify-content-between align-items-center mb-4">
+              <label class="checkbox-wrap checkbox-primary mb-0">Se souvenir de moi
+                <input type="checkbox" id="remember" checked>
+                <span class="checkmark"></span>
+              </label>
+              <a class="link-light small" href="#" aria-disabled="true">Mot de passe oublié ?</a>
+            </div>
+            <div class="form-group">
+              <button type="submit" class="form-control btn btn-primary submit px-3">Se connecter</button>
+            </div>
+          </form>
+          <div id="login-status" class="status mt-3" role="status" aria-live="polite"></div>
+          <p class="hint small text-center mt-4 mb-0">Ce formulaire prépare la requête Supabase. Mets à jour les identifiants par défaut dans la table <code>public.admins</code> si nécessaire.</p>
+        </div>
+      </div>
+    </div>
 
-	<link href="https://fonts.googleapis.com/css?family=Lato:300,400,700&display=swap" rel="stylesheet">
+    <section id="dashboard" class="dashboard d-none">
+      <div class="dashboard-header glass-card">
+        <div class="d-flex align-items-center gap-3">
+          <img src="images/logo.svg" alt="Logo Trend Scope" class="dashboard-logo">
+          <div>
+            <p class="eyebrow mb-1">Tableau de bord</p>
+            <h2 class="brand-title">Trend Scope live</h2>
+            <p class="small text-muted mb-0">Données Supabase + YouTube, rafraîchissement manuel.</p>
+          </div>
+        </div>
+        <div class="actions">
+          <div class="health" id="health-status">
+            <span class="badge status-badge" data-key="supabase">Supabase</span>
+            <span class="badge status-badge" data-key="jwt">JWT</span>
+          </div>
+          <div class="action-buttons">
+            <button class="btn btn-outline" id="btn-refresh">Rafraîchir (YouTube)</button>
+            <button class="btn btn-outline" id="btn-logout">Déconnexion</button>
+          </div>
+        </div>
+      </div>
 
-	<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
-	
-	<link rel="stylesheet" href="css/style.css">
+      <div class="filters glass-card">
+        <div class="filter-group">
+          <label>Pays</label>
+          <select id="filter-country" class="form-control">
+            <option value="FR">France</option>
+            <option value="US">États-Unis</option>
+            <option value="ES">Espagne</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Catégorie</label>
+          <input id="filter-category" class="form-control" type="text" placeholder="Music, Food, Sport…">
+        </div>
+        <div class="filter-group">
+          <label>Recherche</label>
+          <input id="filter-search" class="form-control" type="text" placeholder="Titre ou description">
+        </div>
+        <div class="filter-group checkbox-inline">
+          <label class="checkbox-wrap checkbox-primary">Shorts uniquement
+            <input type="checkbox" id="filter-short">
+            <span class="checkmark"></span>
+          </label>
+        </div>
+      </div>
 
-	</head>
-	<body class="img js-fullheight" style="background-image: url(images/bg.jpg);">
-	<section class="ftco-section">
-		<div class="container">
-			<div class="row justify-content-center">
-				<div class="col-md-6 text-center mb-5">
-					<h2 class="heading-section">Login #10</h2>
-				</div>
-			</div>
-			<div class="row justify-content-center">
-				<div class="col-md-6 col-lg-4">
-					<div class="login-wrap p-0">
-		      	<h3 class="mb-4 text-center">Have an account?</h3>
-		      	<form action="#" class="signin-form">
-		      		<div class="form-group">
-		      			<input type="text" class="form-control" placeholder="Username" required>
-		      		</div>
-	            <div class="form-group">
-	              <input id="password-field" type="password" class="form-control" placeholder="Password" required>
-	              <span toggle="#password-field" class="fa fa-fw fa-eye field-icon toggle-password"></span>
-	            </div>
-	            <div class="form-group">
-	            	<button type="submit" class="form-control btn btn-primary submit px-3">Sign In</button>
-	            </div>
-	            <div class="form-group d-md-flex">
-	            	<div class="w-50">
-		            	<label class="checkbox-wrap checkbox-primary">Remember Me
-									  <input type="checkbox" checked>
-									  <span class="checkmark"></span>
-									</label>
-								</div>
-								<div class="w-50 text-md-right">
-									<a href="#" style="color: #fff">Forgot Password</a>
-								</div>
-	            </div>
-	          </form>
-	          <p class="w-100 text-center">&mdash; Or Sign In With &mdash;</p>
-	          <div class="social d-flex text-center">
-	          	<a href="#" class="px-2 py-2 mr-md-1 rounded"><span class="ion-logo-facebook mr-2"></span> Facebook</a>
-	          	<a href="#" class="px-2 py-2 ml-md-1 rounded"><span class="ion-logo-twitter mr-2"></span> Twitter</a>
-	          </div>
-		      </div>
-				</div>
-			</div>
-		</div>
-	</section>
+      <div class="grid-3">
+        <div class="stat-card glass-card" id="stat-total">
+          <p class="eyebrow">Tendances</p>
+          <h3 class="stat-value" data-stat="total">0</h3>
+          <p class="small text-muted">Vidéos actives dans la vue filtrée</p>
+        </div>
+        <div class="stat-card glass-card" id="stat-shorts">
+          <p class="eyebrow">Shorts</p>
+          <h3 class="stat-value" data-stat="shorts">0</h3>
+          <p class="small text-muted">Vidéos courtes (&lt; 60s)</p>
+        </div>
+        <div class="stat-card glass-card" id="stat-velocity">
+          <p class="eyebrow">Vélocité moyenne</p>
+          <h3 class="stat-value" data-stat="velocity">0</h3>
+          <p class="small text-muted">Vues / heure</p>
+        </div>
+      </div>
 
-	<script src="js/jquery.min.js"></script>
-  <script src="js/popper.js"></script>
-  <script src="js/bootstrap.min.js"></script>
+      <div class="panels">
+        <div class="panel glass-card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow mb-1">Alertes</p>
+              <h3 class="panel-title">Notifications internes</h3>
+            </div>
+            <span class="badge" id="notif-count">0 alertes</span>
+          </div>
+          <ul class="notification-list" id="notification-list"></ul>
+        </div>
+        <div class="panel glass-card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow mb-1">Historique</p>
+              <h3 class="panel-title">Évolution des vues/likes</h3>
+            </div>
+            <span class="badge" id="history-title">Sélectionne une vidéo</span>
+          </div>
+          <div id="history-content" class="history-content">Aucun historique chargé.</div>
+        </div>
+      </div>
+
+      <div class="table-card glass-card">
+        <div class="table-header d-flex justify-content-between align-items-center">
+          <div>
+            <p class="eyebrow mb-1">Tendances YouTube</p>
+            <h3 class="panel-title">Top vélocité</h3>
+          </div>
+          <button class="btn btn-primary" id="btn-load">Charger les vidéos</button>
+        </div>
+        <div class="table-responsive">
+          <table class="table" id="video-table">
+            <thead>
+              <tr>
+                <th>Titre</th>
+                <th>Pays</th>
+                <th>Catégorie</th>
+                <th>Vues</th>
+                <th>Vélocité (v/h)</th>
+                <th>Short</th>
+                <th>Note / Action</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
   <script src="js/main.js"></script>
-
-	</body>
+</body>
 </html>
-
