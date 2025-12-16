@@ -84,6 +84,96 @@
       throw new Error('API injoignable : vérifie l’URL du backend');
     }
 
+  const apiBase = document.documentElement.getAttribute('data-api-base') || '';
+  const state = {
+    token: null,
+    videos: [],
+    history: [],
+    notifications: [],
+    overview: null,
+    activity: [],
+    filters: {
+      country: 'FR',
+      category: '',
+      search: '',
+      shortOnly: false,
+    },
+  };
+
+  const setFullHeight = () => {
+    document.querySelectorAll('.js-fullheight').forEach((el) => {
+      el.style.height = `${window.innerHeight}px`;
+    });
+  };
+
+  const initPasswordToggle = () => {
+    document.querySelectorAll('[data-toggle="password"]').forEach((toggle) => {
+      toggle.addEventListener('click', () => {
+        const targetSelector = toggle.getAttribute('data-target');
+        if (!targetSelector) return;
+        const input = document.querySelector(targetSelector);
+        if (!input) return;
+        const isHidden = input.getAttribute('type') === 'password';
+        input.setAttribute('type', isHidden ? 'text' : 'password');
+        const icon = toggle.querySelector('i');
+        if (icon) {
+          icon.classList.toggle('fa-eye');
+          icon.classList.toggle('fa-eye-slash');
+        }
+      });
+    });
+  };
+
+  const toast = (message, variant = 'success') => {
+    const toastEl = document.getElementById('toast');
+    if (!toastEl) return;
+    toastEl.textContent = message;
+    toastEl.className = `toast ${variant === 'error' ? 'error' : ''} is-visible`;
+    setTimeout(() => {
+      toastEl.classList.remove('is-visible');
+    }, 2800);
+  };
+
+  const updateStatus = (message, variant = 'success') => {
+    const status = document.getElementById('login-status');
+    if (!status) return;
+    status.textContent = message;
+    status.className = `status is-visible status--${variant}`;
+  };
+
+  const api = async (path, options = {}) => {
+    const headers = options.headers || {};
+    if (state.token) headers['X-Admin-Token'] = state.token;
+    if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+
+    const url = `${apiBase}${path}`;
+    let res;
+    try {
+      res = await fetch(url, { ...options, headers });
+    } catch (err) {
+      throw new Error('API injoignable : vérifie l’URL du backend');
+    }
+
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      throw new Error(payload.error || 'Requête échouée');
+    }
+    return res.json();
+  };
+
+  const updateHealthBadges = (health = {}) => {
+    const container = document.getElementById('health-status');
+    if (!container) return;
+    container.querySelectorAll('.status-badge').forEach((badge) => {
+      const key = badge.getAttribute('data-key');
+      const ok = Boolean(health[key]);
+      badge.classList.toggle('is-ok', ok);
+      badge.classList.toggle('is-ko', !ok);
+      badge.textContent = `${key.toUpperCase()} ${ok ? 'UP' : 'KO'}`;
+    });
+  };
+
+    const res = await fetch(path, { ...options, headers });
     if (!res.ok) {
       const payload = await res.json().catch(() => ({}));
       throw new Error(payload.error || 'Requête échouée');
@@ -113,6 +203,11 @@
     const avgVelocity = state.overview?.averageVelocity ?? (state.videos.length
       ? Math.round(state.videos.reduce((acc, v) => acc + Number(v.velocity_per_hour || 0), 0) / state.videos.length)
       : 0);
+    const total = state.videos.length;
+    const shorts = state.videos.filter((v) => v.is_short).length;
+    const avgVelocity = state.videos.length
+      ? Math.round(state.videos.reduce((acc, v) => acc + Number(v.velocity_per_hour || 0), 0) / state.videos.length)
+      : 0;
 
     if (totalEl) totalEl.textContent = total;
     if (shortsEl) shortsEl.textContent = shorts;
@@ -299,6 +394,8 @@
     const { items, threshold } = await api('/api/notifications');
     state.notifications = items || [];
     state.notificationsThreshold = threshold;
+    const { items } = await api('/api/notifications');
+    state.notifications = items || [];
     renderNotifications();
   };
 
@@ -408,6 +505,57 @@
         toast('URL du backend requise', 'error');
         return;
       }
+  const setFullHeight = () => {
+    const fullHeightElements = document.querySelectorAll('.js-fullheight');
+    fullHeightElements.forEach((el) => {
+      el.style.height = `${window.innerHeight}px`;
+    });
+  };
+
+  const initPasswordToggle = () => {
+    document.querySelectorAll('[data-toggle="password"]').forEach((toggle) => {
+      toggle.addEventListener('click', () => {
+        const targetSelector = toggle.getAttribute('data-target');
+        if (!targetSelector) return;
+        const input = document.querySelector(targetSelector);
+        if (!input) return;
+        const isHidden = input.getAttribute('type') === 'password';
+        input.setAttribute('type', isHidden ? 'text' : 'password');
+        const icon = toggle.querySelector('i');
+        if (icon) {
+          icon.classList.toggle('fa-eye');
+          icon.classList.toggle('fa-eye-slash');
+        }
+      });
+    });
+  };
+
+  const updateStatus = (message, variant = 'success') => {
+    const status = document.getElementById('login-status');
+    if (!status) return;
+    status.textContent = message;
+    status.className = `status is-visible status--${variant}`;
+  };
+
+  const handleLogin = () => {
+    const form = document.getElementById('login-form');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const rememberInput = document.getElementById('remember');
+
+    if (!form || !usernameInput || !passwordInput) return;
+
+    // Pré-remplit depuis le stockage local pour fluidifier les tests en local.
+    const storedUser = localStorage.getItem('trendScopeUser');
+    const storedPass = localStorage.getItem('trendScopePass');
+    if (storedUser) usernameInput.value = storedUser;
+    if (storedPass) passwordInput.value = storedPass;
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const username = usernameInput.value.trim();
+      const password = passwordInput.value.trim();
+      const remember = rememberInput?.checked;
 
       if (!username || !password) {
         updateStatus('Merci de renseigner un identifiant et un mot de passe.', 'error');
@@ -434,6 +582,8 @@
         toast('Connexion OK : Supabase et JWT UP');
         showDashboard(health);
         await Promise.all([fetchOverview(), fetchVideos(), fetchNotifications(), fetchActivity()]);
+        await fetchVideos();
+        await fetchNotifications();
       } catch (err) {
         updateStatus(err.message, 'error');
         toast(err.message, 'error');
@@ -489,6 +639,9 @@
       await Promise.all([fetchOverview(), fetchNotifications()]);
     });
     document.getElementById('btn-activity')?.addEventListener('click', fetchActivity);
+      await fetchVideos();
+      await fetchNotifications();
+    });
     document.getElementById('btn-logout')?.addEventListener('click', () => {
       localStorage.removeItem('trendScopeToken');
       document.getElementById('dashboard')?.classList.add('d-none');
@@ -506,6 +659,8 @@
       loadFilters();
       applyFiltersToForm();
       await Promise.all([fetchOverview(), fetchVideos(), fetchNotifications(), fetchActivity()]);
+      await fetchVideos();
+      await fetchNotifications();
     } catch (err) {
       console.warn('Session expirée', err.message);
       localStorage.removeItem('trendScopeToken');
@@ -524,5 +679,17 @@
     bindButtons();
     bindTableActions();
     await restoreSession();
+      updateStatus(
+        'Connexion prête. Les identifiants seront validés côté serveur Supabase avant ouverture du tableau de bord.',
+        'success'
+      );
+    });
+  };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    setFullHeight();
+    window.addEventListener('resize', setFullHeight);
+    initPasswordToggle();
+    handleLogin();
   });
 })();
