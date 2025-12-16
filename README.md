@@ -158,6 +158,38 @@ create table if not exists public.admins (
   created_at timestamptz default now()
 );
 
+-- RLS et politiques pour sécuriser l'accès depuis Supabase REST
+alter table public.videos enable row level security;
+alter table public.video_history enable row level security;
+alter table public.admins enable row level security;
+
+-- Les requêtes publiques (anon) peuvent lire les vidéos
+create policy if not exists "Public read videos" on public.videos
+  for select
+  using (true);
+
+-- Seul le service role peut insérer/mettre à jour/supprimer les vidéos
+create policy if not exists "Service role manage videos" on public.videos
+  for all
+  using (auth.role() = 'service_role')
+  with check (auth.role() = 'service_role');
+
+-- Historique : lecture libre, écriture réservée au service role
+create policy if not exists "Public read history" on public.video_history
+  for select
+  using (true);
+
+create policy if not exists "Service role manage history" on public.video_history
+  for all
+  using (auth.role() = 'service_role')
+  with check (auth.role() = 'service_role');
+
+-- Admins : uniquement service role (authentification côté backend)
+create policy if not exists "Service role manage admins" on public.admins
+  for all
+  using (auth.role() = 'service_role')
+  with check (auth.role() = 'service_role');
+
 insert into public.admins (username, password)
 values ('zakamon', '4GS49PFJ$64@Nr*eXEPa9z%4')
 on conflict (username) do update set password = excluded.password;
