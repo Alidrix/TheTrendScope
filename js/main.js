@@ -1,4 +1,5 @@
 (() => {
+  const apiBase = document.documentElement.getAttribute('data-api-base') || '';
   const state = {
     token: null,
     videos: [],
@@ -59,6 +60,34 @@
     const headers = options.headers || {};
     if (state.token) headers['X-Admin-Token'] = state.token;
     if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+
+    const url = `${apiBase}${path}`;
+    let res;
+    try {
+      res = await fetch(url, { ...options, headers });
+    } catch (err) {
+      throw new Error('API injoignable : vérifie l’URL du backend');
+    }
+
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      throw new Error(payload.error || 'Requête échouée');
+    }
+    return res.json();
+  };
+
+  const updateHealthBadges = (health = {}) => {
+    const container = document.getElementById('health-status');
+    if (!container) return;
+    container.querySelectorAll('.status-badge').forEach((badge) => {
+      const key = badge.getAttribute('data-key');
+      const ok = Boolean(health[key]);
+      badge.classList.toggle('is-ok', ok);
+      badge.classList.toggle('is-ko', !ok);
+      badge.textContent = `${key.toUpperCase()} ${ok ? 'UP' : 'KO'}`;
+    });
+  };
+
     const res = await fetch(path, { ...options, headers });
     if (!res.ok) {
       const payload = await res.json().catch(() => ({}));

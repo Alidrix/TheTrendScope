@@ -17,6 +17,7 @@ const {
   JWT_LEGACY_SECRET,
   YOUTUBE_API_KEY,
   ALERT_MIN_VELOCITY,
+  APP_ORIGIN,
 } = process.env;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -27,6 +28,24 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 const app = express();
 app.use(express.json());
 app.use(express.static(__dirname));
+
+const allowedOrigins = (APP_ORIGIN || '*')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const allowAny = allowedOrigins.includes('*');
+  if (origin && (allowAny || allowedOrigins.includes(origin))) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+  res.header('Vary', 'Origin');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, X-Admin-Token');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  return next();
+});
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },

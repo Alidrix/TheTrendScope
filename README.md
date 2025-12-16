@@ -115,6 +115,9 @@ Ce projet est personnel, non destiné à un usage public pour l’instant. Toute
    npm start
    ```
 4. Ouvre http://localhost:4443 pour afficher le tableau de bord : filtrage par pays/thématique, badge Shorts, notes et marquage « utilisée ».
+5. Authentification : le bouton "Se connecter" valide l'utilisateur/mot de passe via Supabase (`public.admins`). Le token JWT retourné est envoyé dans l'en-tête `X-Admin-Token` pour toutes les actions sécurisées (rafraîchissement, notes, marquage, stats).
+6. API internes disponibles une fois authentifié : `/api/overview` (synthèse Supabase), `/api/activity` (journal des insertions), `/api/notifications` (seuil `ALERT_MIN_VELOCITY`), `/api/videos` (filtré), `/api/videos/refresh` (rafraîchissement YouTube).
+7. Si tu déploies le backend sur un domaine différent du frontend, règle la variable `APP_ORIGIN` dans `.env` (liste d'origines séparées par des virgules) **et** définis l'attribut `data-api-base` sur la balise `<html>` (ex. `data-api-base="https://api.tondomaine.com"`) pour que le frontend cible la bonne API et que CORS autorise les appels.
 5. Authentification : le bouton "Se connecter" valide l'utilisateur/mot de passe via Supabase (`public.admins`). Les en-têtes `X-Admin-User` et `X-Admin-Pass` sont ensuite ajoutés automatiquement pour les actions sécurisées (rafraîchissement, notes, marquage).
 6. API internes disponibles une fois authentifié : `/api/overview` (synthèse Supabase), `/api/activity` (journal des insertions), `/api/notifications` (seuil `ALERT_MIN_VELOCITY`), `/api/videos` (filtré), `/api/videos/refresh` (rafraîchissement YouTube).
 
