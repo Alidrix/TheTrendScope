@@ -5,6 +5,7 @@
     if (stored) return stored;
     if (fromAttr) return fromAttr;
     if (window.location.protocol.startsWith('http')) return window.location.origin;
+    return 'http://localhost:4443';
     return '';
   };
 
@@ -67,10 +68,19 @@
 
   const updateApiBase = (value) => {
     apiBase = value.trim();
+    if (apiBase && !/^https?:\/\//i.test(apiBase)) {
+      apiBase = `http://${apiBase}`;
+    }
     if (apiBase.endsWith('/')) apiBase = apiBase.slice(0, -1);
     if (apiBase) localStorage.setItem('trendScopeApiBase', apiBase);
   };
 
+  const readApiBaseFromInput = () => {
+    const input = document.getElementById('api-base');
+    if (!input) return apiBase;
+    const value = (input.value || '').trim();
+    if (value && value !== apiBase) updateApiBase(value);
+    return apiBase;
   const api = async (path, options = {}) => {
     const headers = options.headers || {};
     if (state.token) headers['X-Admin-Token'] = state.token;
@@ -449,6 +459,10 @@
     const testBtn = document.getElementById('btn-test-api');
     if (input) {
       input.value = apiBase || 'http://localhost:4443';
+      input.addEventListener('input', (e) => {
+        updateApiBase(e.target.value || '');
+      });
+      input.addEventListener('blur', (e) => {
       input.addEventListener('change', (e) => {
         updateApiBase(e.target.value || '');
       });
@@ -496,6 +510,7 @@
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
+      readApiBaseFromInput();
       const username = usernameInput.value.trim();
       const password = passwordInput.value.trim();
       const remember = rememberInput?.checked;
