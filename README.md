@@ -88,12 +88,17 @@ Ce projet est personnel, non destiné à un usage public pour l’instant. Toute
 
 ## 🏁 Démarrage rapide (prototype Node.js minimal)
 
-1. Copie le fichier `.env.example` en `.env` et ajoute les secrets ci-dessous (ou utilise directement ceux fournis) :
+1. Copie le fichier `.env.example` en `.env` et remplis chaque variable sensible :
    ```env
    SUPABASE_URL=https://ltxjjnzsphhprykuwwye.supabase.co
-   SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0eGpqbnpzcGhocHJ5a3V3d3llIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NDc4ODIwNiwiZXhwIjoyMDgwMzY0MjA2fQ.MTSelIYvHPdV4-6aHua7bHAHBuG6zniNmgLLARePZCs
-   SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0eGpqbnpzcGhocHJ5a3V3d3llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3ODgyMDYsImV4cCI6MjA4MDM2NDIwNn0.AR4MHCGyhBDpX3BTBIqQh0qap6tOLUHfuP8HMofF3Sk
-   YOUTUBE_API_KEY=votre_cle
+   SUPABASE_SERVICE_ROLE_KEY=<ta_clé_service_role>
+   SUPABASE_ANON_KEY=<ta_clé_anon>
+   # JWT utilisés pour signer/vérifier les tokens Supabase
+   JWT_CURRENT_KEY=<jwt_current_key>
+   JWT_STANDBY_KEY=<jwt_standby_key>
+   JWT_LEGACY_SECRET=<jwt_legacy_secret>
+   # API YouTube
+   YOUTUBE_API_KEY=<ta_cle_youtube>
    # Identifiant par défaut injecté dans la table `admins` lors du init:db
    ADMIN_USER=zakamon
    ADMIN_PASSWORD=4GS49PFJ$64@Nr*eXEPa9z%4
@@ -152,6 +157,39 @@ create table if not exists public.admins (
   password text not null,
   created_at timestamptz default now()
 );
+
+-- RLS et politiques pour sécuriser l'accès depuis Supabase REST
+alter table public.videos enable row level security;
+alter table public.video_history enable row level security;
+alter table public.admins enable row level security;
+
+drop policy if exists "Public read videos" on public.videos;
+create policy "Public read videos" on public.videos
+  for select
+  using (true);
+
+drop policy if exists "Service role manage videos" on public.videos;
+create policy "Service role manage videos" on public.videos
+  for all
+  using (auth.role() = 'service_role')
+  with check (auth.role() = 'service_role');
+
+drop policy if exists "Public read history" on public.video_history;
+create policy "Public read history" on public.video_history
+  for select
+  using (true);
+
+drop policy if exists "Service role manage history" on public.video_history;
+create policy "Service role manage history" on public.video_history
+  for all
+  using (auth.role() = 'service_role')
+  with check (auth.role() = 'service_role');
+
+drop policy if exists "Service role manage admins" on public.admins;
+create policy "Service role manage admins" on public.admins
+  for all
+  using (auth.role() = 'service_role')
+  with check (auth.role() = 'service_role');
 
 insert into public.admins (username, password)
 values ('zakamon', '4GS49PFJ$64@Nr*eXEPa9z%4')
