@@ -1,266 +1,137 @@
 <!doctype html>
-<html lang="fr" data-api-base="">
+<html lang="fr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-  <title>The Trend Scope | Connexion</title>
-  <meta name="description" content="Tableau de bord The Trend Scope : connexion sécurisée pour suivre les vidéos YouTube les plus virales.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" integrity="sha512-bx1Iev2PXWmBMS2nQomqKgJo0vvArkH5AO9M/dwZ0pniS3pSke1Mt2rt7NmBGG99nmCaTKty+O3O5nQJY6Q3DQ==" crossorigin="anonymous" referrerpolicy="no-referrer" />
-  <link rel="icon" type="image/svg+xml" href="images/logo.svg">
-  <link rel="stylesheet" href="css/style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connexion The Trend Scope</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f172a;
+      --card: #111827;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #22d3ee;
+      --shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Inter", system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at 20% 20%, rgba(34, 211, 238, 0.12), transparent 30%),
+                  radial-gradient(circle at 80% 0%, rgba(94, 234, 212, 0.15), transparent 35%),
+                  var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px;
+    }
+    .card {
+      width: min(480px, 100%);
+      background: var(--card);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 28px;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 24px;
+      letter-spacing: -0.4px;
+    }
+    p.lead {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    form {
+      display: grid;
+      gap: 14px;
+      margin-top: 12px;
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    input, button {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      font-size: 15px;
+    }
+    input:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: 0;
+      border-color: transparent;
+    }
+    button {
+      cursor: pointer;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      background: linear-gradient(120deg, #22d3ee, #0ea5e9);
+      color: #0b1220;
+      border: none;
+      transition: transform 120ms ease, box-shadow 120ms ease;
+      box-shadow: 0 12px 24px rgba(14, 165, 233, 0.35);
+    }
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 16px 30px rgba(14, 165, 233, 0.4);
+    }
+    .hint {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .env {
+      padding: 12px;
+      border-radius: 10px;
+      background: rgba(34, 211, 238, 0.08);
+      border: 1px solid rgba(34, 211, 238, 0.25);
+      color: #e0f2fe;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 13px;
+      margin-top: 10px;
+      white-space: pre-wrap;
+    }
+  </style>
 </head>
-<body class="img js-fullheight" style="background-image: url(images/bg.jpg);">
-  <div class="overlay"></div>
-  <div id="toast" class="toast"></div>
-  <main class="container py-5 page-wrapper">
-    <div class="row align-items-center g-5" id="login-screen">
-      <div class="col-lg-6">
-        <div class="brand-card glass-card mb-4">
-          <div class="d-flex align-items-center gap-3 mb-4">
-            <img src="images/logo.svg" alt="The Trend Scope" class="brand-logo">
-            <div>
-              <p class="eyebrow mb-1">Tableau de bord Supabase</p>
-              <h1 class="brand-title">The Trend Scope</h1>
-              <p class="lead mb-0">Détecteur personnel des vidéos YouTube les plus virales (FR/US/ES).</p>
-            </div>
-          </div>
-          <div class="badges mb-3">
-            <span class="badge rounded-pill text-dark bg-light">YouTube Data API</span>
-            <span class="badge rounded-pill text-dark bg-light">Supabase</span>
-            <span class="badge rounded-pill text-dark bg-light">Auth sécurisée</span>
-          </div>
-          <ul class="feature-list">
-            <li><i class="fa-solid fa-bolt"></i> Détection virale avec vélocité (vues/h) et badge Shorts.</li>
-            <li><i class="fa-solid fa-filter"></i> Filtrage par pays, catégorie et type de contenu.</li>
-            <li><i class="fa-solid fa-chart-line"></i> Historique des vues/likes + notes personnelles synchronisées.</li>
-            <li><i class="fa-solid fa-bell"></i> Notifications internes et rafraîchissement manuel maîtrisé.</li>
-            <li><i class="fa-solid fa-shield-halved"></i> Accès par identifiants Supabase (stockés côté serveur).</li>
-          </ul>
-          <div class="callout mt-3">
-            <p class="mb-1 fw-bold"><i class="fa-solid fa-key"></i> Configuration requise</p>
-            <p class="mb-0 small">Ajoute tes clés <code>SUPABASE_URL</code>, <code>SUPABASE_ANON_KEY</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code> et <code>YOUTUBE_API_KEY</code> dans un fichier <code>.env</code> avant de lancer <code>npm run init:db</code> puis <code>npm start</code>.</p>
-          </div>
-        </div>
+<body>
+  <div class="card" role="main">
+    <h1>Connexion privée</h1>
+    <p class="lead">On repart de zéro : complète simplement ce formulaire. Le backend, les appels API et le tableau de bord seront réinstallés plus tard.</p>
+
+    <form>
+      <div>
+        <label for="backend">URL du backend</label>
+        <input id="backend" type="url" name="backend" placeholder="http://localhost:4443" autocomplete="off">
       </div>
-      <div class="col-lg-5 offset-lg-1">
-        <div class="login-wrap glass-card p-4">
-          <div class="text-center mb-4">
-            <img src="images/logo.svg" alt="Logo The Trend Scope" class="login-logo mb-3">
-            <h2 class="heading-section">Connexion sécurisée</h2>
-            <p class="text-muted mb-0">Les identifiants sont vérifiés côté Supabase avant d'accéder au tableau de bord.</p>
-          </div>
-          <form id="login-form" class="signin-form">
-            <div class="form-group mb-3">
-              <label for="api-base" class="form-label">URL du backend</label>
-              <div class="input-group">
-                <input id="api-base" type="url" class="form-control" name="api-base" placeholder="http://localhost:4443" autocomplete="off">
-                <button class="btn btn-outline-secondary" type="button" id="btn-test-api">Tester</button>
-              </div>
-              <small class="text-muted">Modifie l'URL si tu utilises un port ou domaine différent.</small>
-            </div>
-            <div class="form-group mb-3">
-              <label for="username" class="form-label">Nom d'utilisateur</label>
-              <input id="username" type="text" class="form-control" name="username" placeholder="Admin Supabase" required autocomplete="username">
-            </div>
-            <div class="form-group mb-3 position-relative">
-              <label for="password" class="form-label">Mot de passe</label>
-              <input id="password" type="password" class="form-control" name="password" placeholder="Mot de passe sécurisé" required autocomplete="current-password" minlength="16">
-              <button type="button" class="field-icon" data-toggle="password" data-target="#password" aria-label="Afficher ou masquer le mot de passe">
-                <i class="fa-solid fa-eye"></i>
-              </button>
-            </div>
-            <div class="form-group d-flex justify-content-between align-items-center mb-4">
-              <label class="checkbox-wrap checkbox-primary mb-0">Se souvenir de moi
-                <input type="checkbox" id="remember" checked>
-                <span class="checkmark"></span>
-              </label>
-              <a class="link-light small" href="#" aria-disabled="true">Mot de passe oublié ?</a>
-            </div>
-            <div class="form-group">
-              <button type="submit" class="form-control btn btn-primary submit px-3">Se connecter</button>
-            </div>
-          </form>
-          <div id="login-status" class="status mt-3" role="status" aria-live="polite"></div>
-          <p class="hint small text-center mt-4 mb-0">Ce formulaire prépare la requête Supabase. Mets à jour les identifiants par défaut dans la table <code>public.admins</code> si nécessaire.</p>
-        </div>
+      <div>
+        <label for="username">Nom d'utilisateur</label>
+        <input id="username" type="text" name="username" placeholder="Admin" autocomplete="username">
       </div>
+      <div>
+        <label for="password">Mot de passe (16 caractères min.)</label>
+        <input id="password" type="password" name="password" minlength="16" placeholder="Mot de passe sécurisé" autocomplete="current-password">
+      </div>
+      <button type="submit">Se connecter</button>
+    </form>
+
+    <p class="hint">Les clés API et identifiants nécessaires resteront stockés dans le fichier <code>.env</code>. Aucun autre module n'est conservé pour l'instant.</p>
+    <div class="env">.env
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...
+SUPABASE_ANON_KEY=...
+YOUTUBE_API_KEY=...
     </div>
-
-    <section id="dashboard" class="dashboard d-none">
-      <div class="dashboard-header glass-card">
-        <div class="d-flex align-items-center gap-3">
-          <img src="images/logo.svg" alt="Logo Trend Scope" class="dashboard-logo">
-          <div>
-            <p class="eyebrow mb-1">Tableau de bord</p>
-            <h2 class="brand-title">Trend Scope live</h2>
-            <p class="small text-muted mb-0">Données Supabase + YouTube, rafraîchissement manuel.</p>
-          </div>
-        </div>
-        <div class="actions">
-          <div class="health" id="health-status">
-            <span class="badge status-badge" data-key="supabase">Supabase</span>
-            <span class="badge status-badge" data-key="jwt">JWT</span>
-          </div>
-          <div class="action-buttons">
-            <button class="btn btn-outline" id="btn-refresh">Rafraîchir (YouTube)</button>
-            <button class="btn btn-outline" id="btn-logout">Déconnexion</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="filters glass-card">
-        <div class="filter-group">
-          <label>Pays</label>
-          <select id="filter-country" class="form-control">
-            <option value="FR">France</option>
-            <option value="US">États-Unis</option>
-            <option value="ES">Espagne</option>
-          </select>
-        </div>
-        <div class="filter-group">
-          <label>Catégorie</label>
-          <input id="filter-category" class="form-control" type="text" placeholder="Music, Food, Sport…">
-        </div>
-        <div class="filter-group">
-          <label>Recherche</label>
-          <input id="filter-search" class="form-control" type="text" placeholder="Titre ou description">
-        </div>
-        <div class="filter-group checkbox-inline">
-          <label class="checkbox-wrap checkbox-primary">Shorts uniquement
-            <input type="checkbox" id="filter-short">
-            <span class="checkmark"></span>
-          </label>
-        </div>
-      </div>
-
-      <div class="grid-3">
-        <div class="stat-card glass-card" id="stat-total">
-          <p class="eyebrow">Tendances</p>
-          <h3 class="stat-value" data-stat="total">0</h3>
-          <p class="small text-muted">Vidéos actives dans la vue filtrée</p>
-        </div>
-        <div class="stat-card glass-card" id="stat-shorts">
-          <p class="eyebrow">Shorts</p>
-          <h3 class="stat-value" data-stat="shorts">0</h3>
-          <p class="small text-muted">Vidéos courtes (&lt; 60s)</p>
-        </div>
-        <div class="stat-card glass-card" id="stat-velocity">
-          <p class="eyebrow">Vélocité moyenne</p>
-          <h3 class="stat-value" data-stat="velocity">0</h3>
-          <p class="small text-muted">Vues / heure</p>
-        </div>
-      </div>
-
-      <div class="panels panels-wide">
-        <div class="panel glass-card overview-card">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow mb-1">Synthèse Supabase</p>
-              <h3 class="panel-title">Vue d'ensemble</h3>
-            </div>
-            <span class="badge" id="overview-last-refresh">Non rafraîchi</span>
-          </div>
-          <div class="overview-grid">
-            <div class="overview-top">
-              <p class="small text-muted mb-1">Meilleure vélocité</p>
-              <h4 class="overview-title" id="overview-top-title">Sélectionne une vidéo</h4>
-              <div class="small text-muted" id="overview-top-meta">-</div>
-              <div class="velocity-chip" id="overview-top-velocity">0 v/h</div>
-            </div>
-            <div class="overview-copy">
-              <p class="small text-muted mb-2">Flux de confiance</p>
-              <ul class="bullet-list">
-                <li>Lecture Supabase (service_role) + RLS activé</li>
-                <li>Rafraîchissement manuel des tendances YouTube</li>
-                <li>JWT validés côté serveur avant chaque action</li>
-              </ul>
-              <div class="inline-actions">
-                <button class="btn btn-outline" id="btn-load-overview">Rafraîchir la synthèse</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel glass-card">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow mb-1">Catégories dominantes</p>
-              <h3 class="panel-title">Top 6</h3>
-            </div>
-            <span class="badge" id="notif-threshold">Seuil : 0 v/h</span>
-          </div>
-          <ul id="category-list" class="category-list"></ul>
-        </div>
-
-        <div class="panel glass-card">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow mb-1">Activité Supabase</p>
-              <h3 class="panel-title">Historique récent</h3>
-            </div>
-            <button class="btn btn-outline" id="btn-activity">Recharger</button>
-          </div>
-          <ul id="activity-list" class="activity-list"></ul>
-        </div>
-      </div>
-
-      <div class="panels">
-        <div class="panel glass-card">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow mb-1">Alertes</p>
-              <h3 class="panel-title">Notifications internes</h3>
-            </div>
-            <span class="badge" id="notif-count">0 alertes</span>
-          </div>
-          <ul class="notification-list" id="notification-list"></ul>
-        </div>
-        <div class="panel glass-card">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow mb-1">Historique</p>
-              <h3 class="panel-title">Évolution des vues/likes</h3>
-            </div>
-            <span class="badge" id="history-title">Sélectionne une vidéo</span>
-          </div>
-          <div id="history-content" class="history-content">Aucun historique chargé.</div>
-        </div>
-      </div>
-
-      <div class="table-card glass-card">
-        <div class="table-header d-flex justify-content-between align-items-center">
-          <div>
-            <p class="eyebrow mb-1">Tendances YouTube</p>
-            <h3 class="panel-title">Top vélocité</h3>
-          </div>
-          <div class="d-flex gap-2">
-            <button class="btn btn-outline" id="btn-load">Charger les vidéos</button>
-            <button class="btn btn-outline" id="btn-load-overview-secondary">Synthèse</button>
-          </div>
-        </div>
-        <div class="table-responsive">
-          <table class="table" id="video-table">
-            <thead>
-              <tr>
-                <th>Titre</th>
-                <th>Pays</th>
-                <th>Catégorie</th>
-                <th>Vues</th>
-                <th>Vélocité (v/h)</th>
-                <th>Short</th>
-                <th>Note / Action</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <script src="js/main.js"></script>
+  </div>
 </body>
 </html>
