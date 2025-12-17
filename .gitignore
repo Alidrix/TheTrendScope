@@ -1,7 +1,0 @@
-node_modules
-.env
-npm-debug.log
-.DS_Store
-coverage
-.tmp
-data/store.json
