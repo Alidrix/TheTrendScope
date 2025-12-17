@@ -14,9 +14,23 @@
   "dependencies": {},
   "devDependencies": {
     "typescript": "^5.6.3"
+  "description": "TheTrendScope application assets and server bootstrap",
+  "main": "index.js",
+  "scripts": {
+    "start": "ts-node server/index.ts",
+    "bootstrap": "ts-node server/bootstrap/createSchema.ts",
+    "build": "tsc --pretty",
+    "test": "echo \"No automated tests configured\""
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs"
+  "type": "commonjs",
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
 }
