@@ -20,6 +20,53 @@ function resolveSupabaseClient() {
   return null;
 }
 
+
+function resolveSupabaseClient() {
+  const url = window.SUPABASE_URL || (typeof SUPABASE_URL !== 'undefined' ? SUPABASE_URL : '') || DEFAULT_SUPABASE_URL;
+  const key =
+    window.SUPABASE_ANON_KEY || (typeof SUPABASE_ANON_KEY !== 'undefined' ? SUPABASE_ANON_KEY : '') || DEFAULT_SUPABASE_ANON_KEY;
+
+function resolveSupabaseClient() {
+  const url =
+    window.SUPABASE_URL ||
+    (typeof SUPABASE_URL !== 'undefined' ? SUPABASE_URL : '') ||
+    DEFAULT_SUPABASE_URL;
+  const key =
+    window.SUPABASE_ANON_KEY ||
+    (typeof SUPABASE_ANON_KEY !== 'undefined' ? SUPABASE_ANON_KEY : '') ||
+    DEFAULT_SUPABASE_ANON_KEY;
+
+  window.SUPABASE_URL = url;
+  window.SUPABASE_ANON_KEY = key;
+
+  if (window.supabaseClient) return window.supabaseClient;
+  if (window.supabase && window.supabase.createClient && url && key) {
+    window.supabaseClient = window.supabase.createClient(url, key);
+    return window.supabaseClient;
+  }
+  return null;
+}
+
+const supabase = resolveSupabaseClient();
+const { createClient } = window.supabase || {};
+const supabase =
+  window.supabaseClient ||
+  (createClient && window.SUPABASE_URL && window.SUPABASE_ANON_KEY
+    ? createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY)
+    : null);
+const LOCAL_SESSION_KEY = 'trendscope.local.session';
+
+  window.SUPABASE_URL = url;
+  window.SUPABASE_ANON_KEY = key;
+
+  if (window.supabaseClient) return window.supabaseClient;
+  if (window.supabase && window.supabase.createClient && url && key) {
+    window.supabaseClient = window.supabase.createClient(url, key);
+    return window.supabaseClient;
+  }
+  return null;
+}
+
 const supabase = resolveSupabaseClient();
 const state = {
   videos: [],
@@ -136,6 +183,9 @@ function currentFilters() {
 async function fetchVideos(filters = currentFilters()) {
   if (!supabase) return fallbackVideos();
   let query = supabase
+async function fetchVideos() {
+  if (!supabase) return fallbackVideos();
+  const { data, error } = await supabase
     .from('video_feed')
     .select(
       'id,youtube_id,title,channel_title,thumbnail_url,region,category,language,is_short,status,used_at,views,likes,views_per_hour,published_at,collected_at'
@@ -181,6 +231,61 @@ async function markAsUsed(video) {
   if (!supabase) {
     showToast('Supabase non configuré', 'warning');
     return;
+  }
+  return (data || []).reduce((acc, row) => {
+    acc[row.video_id] = row;
+    return acc;
+  }, {});
+}
+
+async function markAsUsed(video) {
+  if (!supabase) {
+    showToast('Supabase non configuré', 'warning');
+    return;
+async function fetchVideos() {
+  if (!supabase) {
+    notify('Supabase credentials missing. Add SUPABASE_URL and SUPABASE_ANON_KEY.', 'warning');
+    return [];
+  }
+  const { data, error } = await supabase
+    .from('video_feed')
+    .select('id, youtube_id, title, channel_title, thumbnail_url, views, views_per_hour, published_at, collected_at')
+    .order('collected_at', { ascending: false, nullsLast: true })
+    .order('views_per_hour', { ascending: false, nullsLast: true });
+  if (error) {
+    notify(`Error fetching videos: ${error.message}`, 'error');
+    throw error;
+  }
+  return data?.map(normalizeVideoForDashboard) || [];
+}
+
+function renderFilters() {
+  const categories = new Set();
+  const regions = new Set();
+  const languages = new Set();
+
+  state.videos.forEach(({ category, region, language }) => {
+    if (category) categories.add(category);
+    if (region) regions.add(region);
+    if (language) languages.add(language);
+  });
+
+  buildOptions(elements.categorySelect, categories);
+  buildOptions(elements.regionSelect, regions);
+  buildOptions(elements.languageSelect, languages);
+}
+
+function buildOptions(select, values) {
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML =
+    '<option value="all">All</option>' +
+    Array.from(values)
+      .sort()
+      .map((value) => `<option value="${value}">${value}</option>`)
+      .join('');
+  if (Array.from(values).includes(current)) {
+    select.value = current;
   }
   const { error } = await supabase
     .from('videos')
@@ -282,6 +387,41 @@ function buildCard(video, note) {
           ${video.category ? `<span class="badge category">${video.category}</span>` : ''}
           ${alertBadge}
         </div>
+}
+
+function buildCard(video, note) {
+  const deltaViews = formatDelta(video.views, 0);
+  const alertBadge = video.views_per_hour >= ALERT_THRESHOLD ? '<span class="badge short">🚀 Viral</span>' : '';
+  const noteLabel = note?.body ? 'Modifier la note' : 'Ajouter une note';
+  return `
+    <article class="card" data-id="${video.id}">
+      <div class="thumb">
+        <img src="${video.thumbnail_url}" alt="${video.title}" />
+        <div class="badges">
+          ${video.is_short ? '<span class="badge short">Short</span>' : ''}
+          ${video.language ? `<span class="badge language">${video.language}</span>` : ''}
+          ${video.region ? `<span class="badge region">${video.region}</span>` : ''}
+          ${video.category ? `<span class="badge category">${video.category}</span>` : ''}
+          ${alertBadge}
+        </div>
+  const html = filtered
+    .map((video) => buildCard(video, state.stats[video.id], state.notes[video.id]))
+    .join('');
+  elements.grid.innerHTML = html;
+}
+
+function buildCard(video, stat = {}, note = {}) {
+  const delta = (stat.current_views || video.views || 0) - (stat.initial_views || video.views || 0);
+  const deltaClass = delta >= 0 ? 'trend-up' : 'trend-down';
+  const deltaLabel = delta >= 0 ? '▲' : '▼';
+  const videoUrl = video.video_url || (video.youtube_id ? `https://www.youtube.com/watch?v=${video.youtube_id}` : '#');
+  return `
+    <article class="card" data-id="${video.id}">
+      <div class="thumb">
+        <a href="${videoUrl}" target="_blank" rel="noopener noreferrer">
+          <img src="${video.thumbnail_url || 'images/bg.jpg'}" alt="${video.title}">
+        </a>
+        <div class="badges"></div>
       </div>
       <div class="content">
         <h3 class="title">${video.title}</h3>
@@ -297,6 +437,31 @@ function buildCard(video, note) {
           <button class="btn ghost mark-used-btn" data-id="${video.id}"><i class="fa fa-archive"></i> Marquer utilisée</button>
           <button class="btn ghost note-btn" data-id="${video.id}"><i class="fa fa-sticky-note"></i> ${noteLabel}</button>
           <a class="btn secondary" href="${video.video_url}" target="_blank" rel="noopener noreferrer"><i class="fa fa-external-link-alt"></i> Ouvrir sur YouTube</a>
+        </div>
+        <div class="actions-row actions-inline">
+          <button class="btn secondary preview-btn" data-id="${video.id}" data-youtube="${video.youtube_id}"><i class="fa fa-play"></i> Prévisualiser</button>
+          <button class="btn ghost mark-used-btn" data-id="${video.id}"><i class="fa fa-archive"></i> Marquer utilisée</button>
+          <button class="btn ghost note-btn" data-id="${video.id}"><i class="fa fa-sticky-note"></i> ${noteLabel}</button>
+          <a class="btn secondary" href="${video.video_url}" target="_blank" rel="noopener noreferrer"><i class="fa fa-external-link-alt"></i> Ouvrir sur YouTube</a>
+          <div class="stat">
+            <span class="label">Initial views</span>
+            <span class="value">${formatNumber(stat.initial_views || video.views)}</span>
+          </div>
+          <div class="stat">
+            <span class="label">Current views</span>
+            <span class="value">${formatNumber(stat.current_views || video.views)}</span>
+          </div>
+          <div class="stat">
+            <span class="label">Δ views</span>
+            <span class="value ${deltaClass}">${deltaLabel} ${formatNumber(Math.abs(delta))}</span>
+          </div>
+          <div class="stat">
+            <span class="label">Views / hour</span>
+            <span class="value">${formatNumber(stat.views_per_hour || video.views_per_hour)}</span>
+          </div>
+        </div>
+        <div class="actions-row actions-inline">
+          <a class="btn secondary" href="${videoUrl}" target="_blank" rel="noopener noreferrer">Open on YouTube</a>
         </div>
       </div>
     </article>
@@ -339,6 +504,13 @@ function renderGrid() {
   if (!filtered.length) {
     elements.grid.innerHTML = '<div class="empty">Aucune vidéo active ne correspond aux filtres.</div>';
     return;
+function notify(message, type = 'info') {
+  if (elements.toastContainer) {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    elements.toastContainer.appendChild(toast);
+    setTimeout(() => toast.remove(), 3500);
   }
   elements.grid.innerHTML = filtered.map((video) => buildCard(video, state.notes[video.id])).join('');
 }
@@ -380,6 +552,20 @@ async function loadData({ skipRefreshApi = false } = {}) {
     state.notes = notes;
     state.videos = videos.filter((v) => v.status !== 'used');
     state.history = videos.filter((v) => v.status === 'used');
+
+    const alerts = state.videos.filter((v) => v.views_per_hour >= ALERT_THRESHOLD);
+    alerts.forEach((alert) => showToast(`🚀 ${alert.title} dépasse ${formatNumber(ALERT_THRESHOLD)} vues/h`, 'info'));
+
+    state.videos = videos;
+    state.stats = videos.reduce((acc, video) => {
+      acc[video.id] = {
+        initial_views: video.views,
+        current_views: video.views,
+        views_per_hour: video.views_per_hour,
+      };
+      return acc;
+    }, {});
+    state.notes = {};
 
     const alerts = state.videos.filter((v) => v.views_per_hour >= ALERT_THRESHOLD);
     alerts.forEach((alert) => showToast(`🚀 ${alert.title} dépasse ${formatNumber(ALERT_THRESHOLD)} vues/h`, 'info'));
@@ -445,4 +631,81 @@ function bindEvents() {
 window.addEventListener('DOMContentLoaded', () => {
   bindEvents();
   loadData();
+
+  if (target.classList.contains('preview-btn')) {
+    openPreview(video);
+  } else if (target.classList.contains('mark-used-btn')) {
+    markAsUsed(video);
+  } else if (target.classList.contains('note-btn')) {
+    saveNote(video.id, state.notes[video.id]?.body);
+  }
+}
+
+function openPreview(video) {
+  if (!elements.previewModal || !elements.previewFrame) return;
+  const embedUrl = `https://www.youtube.com/embed/${video.youtube_id}`;
+  elements.previewFrame.src = embedUrl;
+  if (elements.previewTitle) elements.previewTitle.textContent = video.title;
+  elements.previewModal.style.display = 'flex';
+}
+
+function closePreview() {
+  if (!elements.previewModal) return;
+  elements.previewModal.style.display = 'none';
+  if (elements.previewFrame) elements.previewFrame.src = '';
+}
+
+function bindEvents() {
+  elements.grid?.addEventListener('click', handleCardActions);
+  elements.refreshBtn?.addEventListener('click', () => loadData());
+  elements.refreshStatsBtn?.addEventListener('click', () => loadData({ skipRefreshApi: true }));
+  elements.categorySelect?.addEventListener('change', renderGrid);
+  elements.regionSelect?.addEventListener('change', renderGrid);
+  elements.languageSelect?.addEventListener('change', renderGrid);
+  elements.previewClose?.addEventListener('click', closePreview);
+  elements.previewModal?.addEventListener('click', (event) => {
+    if (event.target === elements.previewModal) closePreview();
+  });
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  bindEvents();
+  loadData();
+function normalizeVideoForDashboard(video) {
+  return {
+    ...video,
+    creator: video.channel_title || video.channel || 'Unknown creator',
+    thumbnail_url: video.thumbnail_url,
+    region: video.region || '',
+    category: video.category || '',
+    language: video.language || '',
+    video_url: video.youtube_id ? `https://www.youtube.com/watch?v=${video.youtube_id}` : video.url,
+  };
+}
+
+async function requireSession() {
+  try {
+    if (localStorage.getItem(LOCAL_SESSION_KEY)) return true;
+  } catch (e) {
+    console.warn('Unable to read local session', e);
+  }
+  const client = resolveSupabaseClient();
+  if (!client) return false;
+  const { data, error } = await client.auth.getSession();
+  if (!supabase) return false;
+  const { data, error } = await supabase.auth.getSession();
+  if (error) {
+    console.warn('Unable to check Supabase session', error);
+    return false;
+  }
+  return Boolean(data?.session?.access_token);
+}
+
+window.addEventListener('DOMContentLoaded', async () => {
+  const allowed = await requireSession();
+  if (!allowed) {
+    window.location.href = 'index.html';
+    return;
+  }
+  init();
 });

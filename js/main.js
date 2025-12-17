@@ -106,6 +106,11 @@
   }
 
   let supabaseClient = resolveSupabaseClient();
+  const supabaseClient =
+    window.supabaseClient ||
+    (window.supabase && window.SUPABASE_URL && window.SUPABASE_ANON_KEY
+      ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY)
+      : null);
 
   const authConfig = window.authConfig || {};
 
@@ -437,6 +442,34 @@
     toast.addEventListener("hidden.bs.toast", () => toast.remove());
   }
 
+
+  function showToast(message, variant) {
+    if (!dom.toastContainer || !message) return;
+    const intent = variant || "info";
+    const toastId = `toast-${Date.now()}`;
+    const toast = document.createElement("div");
+    toast.className = `toast align-items-center text-white bg-${intent} border-0`;
+    toast.setAttribute("role", "alert");
+    toast.setAttribute("aria-live", "assertive");
+    toast.setAttribute("aria-atomic", "true");
+    toast.dataset.delay = "3000";
+    toast.id = toastId;
+    toast.innerHTML = `
+      <div class="d-flex">
+        <div class="toast-body">${message}</div>
+        <button type="button" class="ml-2 mb-1 close text-white" data-dismiss="toast" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+    `;
+    dom.toastContainer.appendChild(toast);
+    // @ts-ignore bootstrap toast
+    $(toast).toast({ delay: 3000 });
+    // @ts-ignore bootstrap toast
+    $(toast).toast("show");
+    toast.addEventListener("hidden.bs.toast", () => toast.remove());
+  }
+
   function setLoading(isLoading) {
     if (!dom.loginForm) return;
     const formControls = dom.loginForm.querySelectorAll("input, button, a");
@@ -465,6 +498,41 @@
       console.warn("Unable to persist auth session", e);
     }
   }
+
+  function persistLocalSession(identifier) {
+    try {
+      localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ user: identifier, createdAt: Date.now() }));
+    } catch (e) {
+      console.warn("Unable to persist local session", e);
+    }
+  }
+
+  function hasLocalSession() {
+    try {
+      return Boolean(localStorage.getItem(LOCAL_SESSION_KEY));
+    } catch {
+      return false;
+    }
+  }
+
+
+  function hasLocalSession() {
+    try {
+      return Boolean(localStorage.getItem(LOCAL_SESSION_KEY));
+    } catch {
+      return false;
+    }
+  }
+
+
+  function hasLocalSession() {
+    try {
+      return Boolean(localStorage.getItem(LOCAL_SESSION_KEY));
+    } catch {
+      return false;
+    }
+  }
+
 
   function persistLocalSession(identifier) {
     try {
@@ -602,6 +670,97 @@
 
     try {
       supabaseClient = resolveSupabaseClient();
+      videos = await fetchVideosFromSupabase();
+      if (!videos.length) {
+        setStatus("Aucune vidéo Supabase. Affichage des données de secours.", "warning");
+        videos = fallbackVideos;
+        source = "fallback";
+      } else {
+        clearStatus();
+      }
+    } catch (error) {
+      console.error("Failed to load videos from Supabase", error);
+      setStatus("Supabase request failed; showing cached sample data.", "warning");
+      videos = fallbackVideos;
+      source = "fallback";
+    }
+
+    const normalized = normalizeVideos(videos);
+    updateState(normalized, source);
+    renderDashboard();
+    state.dashboardLoaded = true;
+  }
+
+  async function initAuthFlow() {
+    if (dom.loginForm) {
+      dom.loginForm.addEventListener("submit", handleLogin);
+    }
+    const allowed = await guardAccess();
+    if (allowed) {
+      await loadDashboard();
+    }
+
+    let videos = [];
+    let source = "Supabase";
+
+    try {
+      supabaseClient = resolveSupabaseClient();
+      videos = await fetchVideosFromSupabase();
+      if (!videos.length) {
+        setStatus("Aucune vidéo Supabase. Affichage des données de secours.", "warning");
+        videos = fallbackVideos;
+        source = "fallback";
+      } else {
+        clearStatus();
+      }
+    } catch (error) {
+      console.error("Failed to load videos from Supabase", error);
+      setStatus("Supabase request failed; showing cached sample data.", "warning");
+      videos = fallbackVideos;
+      source = "fallback";
+    }
+
+    const normalized = normalizeVideos(videos);
+    updateState(normalized, source);
+    renderDashboard();
+    state.dashboardLoaded = true;
+  }
+
+
+    const normalized = normalizeVideos(videos);
+    updateState(normalized, source);
+    renderDashboard();
+    state.dashboardLoaded = true;
+  }
+
+  async function initAuthFlow() {
+    if (dom.loginForm) {
+      dom.loginForm.addEventListener("submit", handleLogin);
+    }
+    const allowed = await guardAccess();
+    if (allowed) {
+      await loadDashboard();
+    }
+  }
+
+  function init() {
+    wireEvents();
+    initAuthFlow().catch((error) => {
+      showFeedback(error.message || "Failed to initialize authentication.");
+    });
+  }
+
+
+
+  async function loadDashboard() {
+    setShell("dashboard");
+    setStatus("Chargement des vidéos en cours…", "info");
+    wireEvents();
+
+    let videos = [];
+    let source = "Supabase";
+
+    try {
       videos = await fetchVideosFromSupabase();
       if (!videos.length) {
         setStatus("Aucune vidéo Supabase. Affichage des données de secours.", "warning");

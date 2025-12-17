@@ -137,3 +137,4 @@ left join lateral (
 ```
 
 After running the SQL, set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in your Vercel project so the client loads without the “Supabase client is not available” error. Optional: create Supabase Auth users if you want to add authentication later, but the current dashboard is publicly accessible for rapid validation.
+After running the SQL, add a Supabase Auth user (email/password) for dashboard login or configure `ADMIN_USER`/`ADMIN_PASSWORD` on the frontend so the fallback login works. Also be sure to set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in your Vercel project so the client loads without the “Supabase client is not available” error.
