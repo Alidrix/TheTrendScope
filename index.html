@@ -64,6 +64,15 @@
             <option value="es">es</option>
           </select>
         </div>
+        <div class="control">
+          <label for="filter-language">Langue</label>
+          <select id="filter-language">
+            <option value="all">Toutes</option>
+            <option value="fr">fr</option>
+            <option value="en">en</option>
+            <option value="es">es</option>
+          </select>
+        </div>
       </section>
 
       <section id="video-grid" class="grid"></section>
@@ -119,6 +128,28 @@
             </div>
           </div>
         </div>
+        <div class="control" style="display:flex;align-items:flex-end;">
+          <button class="btn" id="search-btn" style="width:100%;justify-content:center;">
+            <i class="fa fa-search"></i>
+            Rechercher
+          </button>
+        </div>
+      </section>
+
+      <section id="video-grid" class="grid"></section>
+
+      <section class="notification-center" id="history-section">
+        <h3>Historique</h3>
+        <div class="notifications" id="history-list"></div>
+      </section>
+    </main>
+
+    <div class="toast-container"></div>
+
+    <div class="page-loader">
+      <div class="panel">
+        <div class="loader"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+        Mise à jour des tendances…
       </div>
 
       <div id="alert-panel" class="alert-panel shadow-lg">

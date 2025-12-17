@@ -525,6 +525,15 @@
   }
 
 
+  function hasLocalSession() {
+    try {
+      return Boolean(localStorage.getItem(LOCAL_SESSION_KEY));
+    } catch {
+      return false;
+    }
+  }
+
+
   function persistLocalSession(identifier) {
     try {
       localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ user: identifier, createdAt: Date.now() }));
@@ -682,6 +691,41 @@
     state.dashboardLoaded = true;
   }
 
+  async function initAuthFlow() {
+    if (dom.loginForm) {
+      dom.loginForm.addEventListener("submit", handleLogin);
+    }
+    const allowed = await guardAccess();
+    if (allowed) {
+      await loadDashboard();
+    }
+
+    let videos = [];
+    let source = "Supabase";
+
+    try {
+      supabaseClient = resolveSupabaseClient();
+      videos = await fetchVideosFromSupabase();
+      if (!videos.length) {
+        setStatus("Aucune vidéo Supabase. Affichage des données de secours.", "warning");
+        videos = fallbackVideos;
+        source = "fallback";
+      } else {
+        clearStatus();
+      }
+    } catch (error) {
+      console.error("Failed to load videos from Supabase", error);
+      setStatus("Supabase request failed; showing cached sample data.", "warning");
+      videos = fallbackVideos;
+      source = "fallback";
+    }
+
+    const normalized = normalizeVideos(videos);
+    updateState(normalized, source);
+    renderDashboard();
+    state.dashboardLoaded = true;
+  }
+
 
     const normalized = normalizeVideos(videos);
     updateState(normalized, source);
@@ -705,6 +749,7 @@
       showFeedback(error.message || "Failed to initialize authentication.");
     });
   }
+
 
 
   async function loadDashboard() {

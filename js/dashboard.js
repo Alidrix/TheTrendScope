@@ -9,6 +9,23 @@ function resolveSupabaseClient() {
   const key =
     window.SUPABASE_ANON_KEY || (typeof SUPABASE_ANON_KEY !== 'undefined' ? SUPABASE_ANON_KEY : '') || DEFAULT_SUPABASE_ANON_KEY;
 
+  window.SUPABASE_URL = url;
+  window.SUPABASE_ANON_KEY = key;
+
+  if (window.supabaseClient) return window.supabaseClient;
+  if (window.supabase && window.supabase.createClient && url && key) {
+    window.supabaseClient = window.supabase.createClient(url, key);
+    return window.supabaseClient;
+  }
+  return null;
+}
+
+
+function resolveSupabaseClient() {
+  const url = window.SUPABASE_URL || (typeof SUPABASE_URL !== 'undefined' ? SUPABASE_URL : '') || DEFAULT_SUPABASE_URL;
+  const key =
+    window.SUPABASE_ANON_KEY || (typeof SUPABASE_ANON_KEY !== 'undefined' ? SUPABASE_ANON_KEY : '') || DEFAULT_SUPABASE_ANON_KEY;
+
 function resolveSupabaseClient() {
   const url =
     window.SUPABASE_URL ||
@@ -66,6 +83,7 @@ const elements = {
   categorySelect: document.getElementById('filter-category'),
   regionSelect: document.getElementById('filter-region'),
   languageSelect: document.getElementById('filter-language'),
+  searchBtn: document.getElementById('search-btn'),
   refreshBtn: document.getElementById('refresh-btn'),
   refreshStatsBtn: document.getElementById('refresh-stats-btn'),
   toastContainer: document.querySelector('.toast-container'),
@@ -154,6 +172,17 @@ function normalizeVideo(video, fallbackIndex = 0) {
   };
 }
 
+function currentFilters() {
+  return {
+    category: elements.categorySelect?.value || 'all',
+    region: elements.regionSelect?.value || 'all',
+    language: elements.languageSelect?.value || 'all',
+  };
+}
+
+async function fetchVideos(filters = currentFilters()) {
+  if (!supabase) return fallbackVideos();
+  let query = supabase
 async function fetchVideos() {
   if (!supabase) return fallbackVideos();
   const { data, error } = await supabase
@@ -164,6 +193,17 @@ async function fetchVideos() {
     .order('status', { ascending: true })
     .order('collected_at', { ascending: false, nullsLast: true });
 
+  if (filters.category && filters.category !== 'all') {
+    query = query.eq('category', filters.category);
+  }
+  if (filters.region && filters.region !== 'all') {
+    query = query.eq('region', filters.region);
+  }
+  if (filters.language && filters.language !== 'all') {
+    query = query.eq('language', filters.language);
+  }
+
+  const { data, error } = await query;
   if (error) {
     showToast(`Erreur Supabase: ${error.message}`, 'error');
     return fallbackVideos();
@@ -180,6 +220,17 @@ async function fetchNotes(videoIds = []) {
   if (error) {
     showToast(`Notes: ${error.message}`, 'error');
     return {};
+  }
+  return (data || []).reduce((acc, row) => {
+    acc[row.video_id] = row;
+    return acc;
+  }, {});
+}
+
+async function markAsUsed(video) {
+  if (!supabase) {
+    showToast('Supabase non configuré', 'warning');
+    return;
   }
   return (data || []).reduce((acc, row) => {
     acc[row.video_id] = row;
@@ -336,6 +387,23 @@ function buildCard(video, note) {
           ${video.category ? `<span class="badge category">${video.category}</span>` : ''}
           ${alertBadge}
         </div>
+}
+
+function buildCard(video, note) {
+  const deltaViews = formatDelta(video.views, 0);
+  const alertBadge = video.views_per_hour >= ALERT_THRESHOLD ? '<span class="badge short">🚀 Viral</span>' : '';
+  const noteLabel = note?.body ? 'Modifier la note' : 'Ajouter une note';
+  return `
+    <article class="card" data-id="${video.id}">
+      <div class="thumb">
+        <img src="${video.thumbnail_url}" alt="${video.title}" />
+        <div class="badges">
+          ${video.is_short ? '<span class="badge short">Short</span>' : ''}
+          ${video.language ? `<span class="badge language">${video.language}</span>` : ''}
+          ${video.region ? `<span class="badge region">${video.region}</span>` : ''}
+          ${video.category ? `<span class="badge category">${video.category}</span>` : ''}
+          ${alertBadge}
+        </div>
   const html = filtered
     .map((video) => buildCard(video, state.stats[video.id], state.notes[video.id]))
     .join('');
@@ -363,6 +431,12 @@ function buildCard(video, stat = {}, note = {}) {
           <div class="stat"><span class="label">Likes</span><span class="value">${formatNumber(video.likes)}</span></div>
           <div class="stat"><span class="label">Δ vues</span><span class="value trend-up">${deltaViews}</span></div>
           <div class="stat"><span class="label">Vélocité</span><span class="value">${formatNumber(video.views_per_hour)} /h</span></div>
+        </div>
+        <div class="actions-row actions-inline">
+          <button class="btn secondary preview-btn" data-id="${video.id}" data-youtube="${video.youtube_id}"><i class="fa fa-play"></i> Prévisualiser</button>
+          <button class="btn ghost mark-used-btn" data-id="${video.id}"><i class="fa fa-archive"></i> Marquer utilisée</button>
+          <button class="btn ghost note-btn" data-id="${video.id}"><i class="fa fa-sticky-note"></i> ${noteLabel}</button>
+          <a class="btn secondary" href="${video.video_url}" target="_blank" rel="noopener noreferrer"><i class="fa fa-external-link-alt"></i> Ouvrir sur YouTube</a>
         </div>
         <div class="actions-row actions-inline">
           <button class="btn secondary preview-btn" data-id="${video.id}" data-youtube="${video.youtube_id}"><i class="fa fa-play"></i> Prévisualiser</button>
@@ -461,6 +535,7 @@ async function loadData({ skipRefreshApi = false } = {}) {
     state.loading = true;
     toggleLoader(true);
     setButtonBusy(elements.refreshBtn, true, 'Rafraîchir…');
+    setButtonBusy(elements.searchBtn, true, 'Rechercher…');
     if (elements.refreshStatsBtn) setButtonBusy(elements.refreshStatsBtn, true, 'Stats…');
 
     if (!skipRefreshApi) {
@@ -477,6 +552,9 @@ async function loadData({ skipRefreshApi = false } = {}) {
     state.notes = notes;
     state.videos = videos.filter((v) => v.status !== 'used');
     state.history = videos.filter((v) => v.status === 'used');
+
+    const alerts = state.videos.filter((v) => v.views_per_hour >= ALERT_THRESHOLD);
+    alerts.forEach((alert) => showToast(`🚀 ${alert.title} dépasse ${formatNumber(ALERT_THRESHOLD)} vues/h`, 'info'));
 
     state.videos = videos;
     state.stats = videos.reduce((acc, video) => {
@@ -500,6 +578,7 @@ async function loadData({ skipRefreshApi = false } = {}) {
     state.loading = false;
     toggleLoader(false);
     setButtonBusy(elements.refreshBtn, false, '<i class="fa fa-refresh"></i> Rafraîchir');
+    setButtonBusy(elements.searchBtn, false, '<i class="fa fa-search"></i> Rechercher');
     if (elements.refreshStatsBtn) setButtonBusy(elements.refreshStatsBtn, false, '<i class="fa fa-chart-line"></i> Rafraîchir les stats');
   }
 }
@@ -511,6 +590,47 @@ function handleCardActions(event) {
   const videoId = target.dataset.id || card?.dataset.id;
   const video = state.videos.find((v) => v.id === videoId) || state.history.find((v) => v.id === videoId);
   if (!video) return;
+
+  if (target.classList.contains('preview-btn')) {
+    openPreview(video);
+  } else if (target.classList.contains('mark-used-btn')) {
+    markAsUsed(video);
+  } else if (target.classList.contains('note-btn')) {
+    saveNote(video.id, state.notes[video.id]?.body);
+  }
+}
+
+function openPreview(video) {
+  if (!elements.previewModal || !elements.previewFrame) return;
+  const embedUrl = `https://www.youtube.com/embed/${video.youtube_id}`;
+  elements.previewFrame.src = embedUrl;
+  if (elements.previewTitle) elements.previewTitle.textContent = video.title;
+  elements.previewModal.style.display = 'flex';
+}
+
+function closePreview() {
+  if (!elements.previewModal) return;
+  elements.previewModal.style.display = 'none';
+  if (elements.previewFrame) elements.previewFrame.src = '';
+}
+
+function bindEvents() {
+  elements.grid?.addEventListener('click', handleCardActions);
+  elements.refreshBtn?.addEventListener('click', () => loadData());
+  elements.searchBtn?.addEventListener('click', () => loadData({ skipRefreshApi: true }));
+  elements.refreshStatsBtn?.addEventListener('click', () => loadData({ skipRefreshApi: true }));
+  elements.categorySelect?.addEventListener('change', renderGrid);
+  elements.regionSelect?.addEventListener('change', renderGrid);
+  elements.languageSelect?.addEventListener('change', renderGrid);
+  elements.previewClose?.addEventListener('click', closePreview);
+  elements.previewModal?.addEventListener('click', (event) => {
+    if (event.target === elements.previewModal) closePreview();
+  });
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  bindEvents();
+  loadData();
 
   if (target.classList.contains('preview-btn')) {
     openPreview(video);
