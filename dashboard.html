@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TrendScope Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <link rel="stylesheet" href="css/dashboard.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  </head>
+  <body>
+    <header>
+      <div class="header-inner">
+        <div class="brand">
+          <span class="dot"></span>
+          TrendScope Dashboard
+        </div>
+        <div class="actions">
+          <button class="btn secondary" id="refresh-btn">
+            <i class="fa fa-refresh"></i>
+            Refresh trends
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="controls">
+        <div class="control">
+          <label for="filter-category">Category</label>
+          <select id="filter-category">
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="filter-region">Region</label>
+          <select id="filter-region">
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="filter-language">Language</label>
+          <select id="filter-language">
+            <option value="all">All</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="notification-center">
+        <h3>Notifications</h3>
+        <div class="notifications"></div>
+      </section>
+
+      <section id="video-grid" class="grid"></section>
+    </main>
+
+    <div class="toast-container"></div>
+
+    <div class="page-loader">
+      <div class="panel">
+        <div class="loader"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+        Refreshing trends…
+      </div>
+    </div>
+
+    <script src="js/dashboard.js"></script>
+  </body>
+</html>
