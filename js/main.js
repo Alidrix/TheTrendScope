@@ -2,46 +2,63 @@
   "use strict";
 
   const ALERT_THRESHOLD = 500000;
+  const LOCAL_SESSION_KEY = "trendscope.local.session";
+
   const fallbackVideos = [
     {
       id: "fallback-1",
+      youtube_id: "H2x5Lw",
       title: "AI trailer rewrites break the internet",
       channel: "Creator Lab",
-      thumbnail_url: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=900&q=60",
+      thumbnail_url:
+        "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=900&q=60",
       views: 9820000,
       views_per_hour: 742000,
       published_at: "2024-08-16T13:00:00Z",
+      video_url: "https://www.youtube.com/watch?v=H2x5Lw",
     },
     {
       id: "fallback-2",
+      youtube_id: "t9M2vb",
       title: "24h speedrun of the world’s hardest puzzle",
       channel: "Puzzle Forge",
-      thumbnail_url: "https://images.unsplash.com/photo-1522199710521-72d69614c702?auto=format&fit=crop&w=900&q=60",
+      thumbnail_url:
+        "https://images.unsplash.com/photo-1522199710521-72d69614c702?auto=format&fit=crop&w=900&q=60",
       views: 4512000,
       views_per_hour: 529000,
       published_at: "2024-08-16T09:15:00Z",
+      video_url: "https://www.youtube.com/watch?v=t9M2vb",
     },
     {
       id: "fallback-3",
+      youtube_id: "kX2jQz",
       title: "Live: breaking tech earnings",
       channel: "MarketStream",
-      thumbnail_url: "https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=60",
+      thumbnail_url:
+        "https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=60",
       views: 1210000,
       views_per_hour: 312000,
       published_at: "2024-08-16T08:00:00Z",
+      video_url: "https://www.youtube.com/watch?v=kX2jQz",
     },
     {
       id: "fallback-4",
+      youtube_id: "Jd83Az",
       title: "How to film cinematic drone shots",
       channel: "Skyline Studio",
-      thumbnail_url: "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=900&q=60",
+      thumbnail_url:
+        "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=900&q=60",
       views: 890000,
       views_per_hour: 221000,
       published_at: "2024-08-16T07:30:00Z",
+      video_url: "https://www.youtube.com/watch?v=Jd83Az",
     },
   ];
 
   const dom = {
+    dashboardShell: document.getElementById("dashboard-shell"),
+    loginShell: document.getElementById("login-shell"),
+    navbar: document.querySelector(".dashboard-nav"),
     videoGrid: document.getElementById("video-grid"),
     alertCountBadge: document.getElementById("alert-count-badge"),
     alertFeedCount: document.getElementById("alert-feed-count"),
@@ -53,19 +70,63 @@
     alertPanelList: document.getElementById("alert-panel-list"),
     status: document.getElementById("data-status"),
     lastRefreshed: document.getElementById("last-refreshed"),
+    loginForm: document.querySelector(".signin-form"),
+    usernameField: document.getElementById("username-field"),
+    passwordField: document.getElementById("password-field"),
+    submitButton: document.getElementById("login-submit"),
+    loader: document.getElementById("sign-in-loader"),
+    feedback: document.getElementById("login-feedback"),
+    toastContainer: document.getElementById("toast-container"),
+    passwordToggle: document.querySelector(".toggle-password"),
   };
 
-  const supabaseUrl = window.SUPABASE_URL;
-  const supabaseAnonKey = window.SUPABASE_ANON_KEY;
-  const supabaseClient = window.supabase && supabaseUrl && supabaseAnonKey
-    ? window.supabase.createClient(supabaseUrl, supabaseAnonKey)
-    : null;
+  const DEFAULT_SUPABASE_URL = "https://ltxjjnzsphhprykuwwye.supabase.co";
+  const DEFAULT_SUPABASE_ANON_KEY =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0eGpqbnpzcGhocHJ5a3V3d3llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3ODgyMDYsImV4cCI6MjA4MDM2NDIwNn0.AR4MHCGyhBDpX3BTBIqQh0qap6tOLUHfuP8HMofF3Sk";
+
+  function resolveSupabaseClient() {
+    const url =
+      window.SUPABASE_URL ||
+      (typeof SUPABASE_URL !== "undefined" ? SUPABASE_URL : "") ||
+      DEFAULT_SUPABASE_URL;
+    const key =
+      window.SUPABASE_ANON_KEY ||
+      (typeof SUPABASE_ANON_KEY !== "undefined" ? SUPABASE_ANON_KEY : "") ||
+      DEFAULT_SUPABASE_ANON_KEY;
+
+    window.SUPABASE_URL = url;
+    window.SUPABASE_ANON_KEY = key;
+
+    if (window.supabaseClient) return window.supabaseClient;
+    if (window.supabase && typeof window.supabase.createClient === "function" && url && key) {
+      window.supabaseClient = window.supabase.createClient(url, key);
+      return window.supabaseClient;
+    }
+    return null;
+  }
+
+  let supabaseClient = resolveSupabaseClient();
+
+  const authConfig = window.authConfig || {};
 
   const state = {
     videos: [],
     alerts: [],
     source: "",
+    dashboardLoaded: false,
   };
+
+  function setShell(view) {
+    if (dom.dashboardShell) {
+      dom.dashboardShell.classList.toggle("d-none", view !== "dashboard");
+    }
+    if (dom.loginShell) {
+      dom.loginShell.classList.toggle("d-none", view !== "login");
+    }
+    if (dom.navbar) {
+      dom.navbar.classList.toggle("d-none", view !== "dashboard");
+    }
+  }
 
   function formatNumber(value) {
     if (value === undefined || value === null) return "0";
@@ -87,7 +148,7 @@
 
   function setStatus(message, variant = "info") {
     if (!dom.status) return;
-    dom.status.classList.remove("d-none", "alert-info", "alert-warning", "alert-danger");
+    dom.status.classList.remove("d-none", "alert-info", "alert-warning", "alert-danger", "alert-success");
     dom.status.classList.add(`alert-${variant}`);
     dom.status.textContent = message;
   }
@@ -104,15 +165,23 @@
         video.views_per_hour || video.viewsPerHour || video.viewsperhour || 0
       );
       const alertFlag = viewsPerHour >= ALERT_THRESHOLD || video.alert === true;
+      const youtubeId = video.youtube_id || video.youtubeId || video.id || `video-${index}`;
+      const videoUrl =
+        video.video_url ||
+        video.url ||
+        (youtubeId ? `https://www.youtube.com/watch?v=${youtubeId}` : "");
+
       return {
-        id: video.id || `video-${index}`,
+        id: video.id || youtubeId || `video-${index}`,
+        youtube_id: youtubeId,
         title: video.title || video.name || "Untitled video",
-        channel: video.channel || video.channel_name || video.channelTitle || "Unknown channel",
+        channel: video.channel || video.channel_title || video.channel_name || "Unknown channel",
         thumbnail_url: video.thumbnail_url || video.thumbnail || video.thumbnailUrl || "",
-        views: Number(video.views || video.total_views || 0),
+        views: Number(video.views || video.total_views || video.current_views || 0),
         views_per_hour: viewsPerHour,
-        published_at: video.published_at || video.publishedAt || video.created_at || "",
+        published_at: video.published_at || video.publishedAt || video.collected_at || video.created_at || "",
         alert: alertFlag,
+        video_url: videoUrl,
       };
     });
   }
@@ -129,11 +198,12 @@
     }
 
     const { data, error } = await supabaseClient
-      .from("videos")
+      .from("video_feed")
       .select(
-        "id,title,channel,channel_name,thumbnail_url,views,views_per_hour,published_at,alert"
+        "id,youtube_id,title,channel_title,thumbnail_url,views,views_per_hour,published_at,collected_at"
       )
-      .order("views_per_hour", { ascending: false });
+      .order("collected_at", { ascending: false, nullsLast: true })
+      .order("views_per_hour", { ascending: false, nullsLast: true });
 
     if (error) throw error;
     return data || [];
@@ -147,8 +217,11 @@
     card.className = "card video-card shadow-sm h-100";
     if (video.alert) card.classList.add("video-card-alert");
 
-    const thumb = document.createElement("div");
-    thumb.className = "video-thumb";
+    const thumb = document.createElement("a");
+    thumb.className = "video-thumb d-block";
+    thumb.href = video.video_url || "#";
+    thumb.target = "_blank";
+    thumb.rel = "noopener noreferrer";
     if (video.thumbnail_url) {
       thumb.style.backgroundImage = `url(${video.thumbnail_url})`;
     } else {
@@ -196,9 +269,20 @@
     metricsRow.appendChild(velocity);
     metricsRow.appendChild(alertBadge);
 
+    const ctaRow = document.createElement("div");
+    ctaRow.className = "d-flex align-items-center mt-3";
+    const linkBtn = document.createElement("a");
+    linkBtn.className = "btn btn-sm btn-outline-light";
+    linkBtn.href = video.video_url || "#";
+    linkBtn.target = "_blank";
+    linkBtn.rel = "noopener noreferrer";
+    linkBtn.textContent = "Voir sur YouTube";
+    ctaRow.appendChild(linkBtn);
+
     cardBody.appendChild(titleRow);
     cardBody.appendChild(channelRow);
     cardBody.appendChild(metricsRow);
+    cardBody.appendChild(ctaRow);
 
     card.appendChild(thumb);
     card.appendChild(cardBody);
@@ -287,6 +371,14 @@
     document.addEventListener("keyup", (event) => {
       if (event.key === "Escape") toggleAlertPanel(false);
     });
+    if (dom.passwordToggle && dom.passwordField) {
+      dom.passwordToggle.addEventListener("click", () => {
+        const inputType = dom.passwordField.getAttribute("type") === "password" ? "text" : "password";
+        dom.passwordField.setAttribute("type", inputType);
+        dom.passwordToggle.classList.toggle("fa-eye");
+        dom.passwordToggle.classList.toggle("fa-eye-slash");
+      });
+    }
   }
 
   function updateTimestamp() {
@@ -304,17 +396,215 @@
     updateTimestamp();
   }
 
-  async function init() {
-    setStatus("Loading videos from Supabase…", "info");
+  function showFeedback(message, variant) {
+    if (!dom.feedback) return;
+    if (!message) {
+      dom.feedback.classList.add("d-none");
+      dom.feedback.textContent = "";
+      dom.feedback.classList.remove("alert-danger", "alert-success", "alert-info");
+      return;
+    }
+    const intent = variant || "danger";
+    dom.feedback.classList.remove("d-none", "alert-danger", "alert-success", "alert-info");
+    dom.feedback.classList.add(`alert-${intent}`);
+    dom.feedback.textContent = message;
+  }
+
+  function showToast(message, variant) {
+    if (!dom.toastContainer || !message) return;
+    const intent = variant || "info";
+    const toastId = `toast-${Date.now()}`;
+    const toast = document.createElement("div");
+    toast.className = `toast align-items-center text-white bg-${intent} border-0`;
+    toast.setAttribute("role", "alert");
+    toast.setAttribute("aria-live", "assertive");
+    toast.setAttribute("aria-atomic", "true");
+    toast.dataset.delay = "3000";
+    toast.id = toastId;
+    toast.innerHTML = `
+      <div class="d-flex">
+        <div class="toast-body">${message}</div>
+        <button type="button" class="ml-2 mb-1 close text-white" data-dismiss="toast" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+    `;
+    dom.toastContainer.appendChild(toast);
+    // @ts-ignore bootstrap toast
+    $(toast).toast({ delay: 3000 });
+    // @ts-ignore bootstrap toast
+    $(toast).toast("show");
+    toast.addEventListener("hidden.bs.toast", () => toast.remove());
+  }
+
+  function setLoading(isLoading) {
+    if (!dom.loginForm) return;
+    const formControls = dom.loginForm.querySelectorAll("input, button, a");
+    formControls.forEach((el) => {
+      if (isLoading) {
+        el.setAttribute("disabled", "true");
+      } else {
+        el.removeAttribute("disabled");
+      }
+    });
+    if (dom.submitButton) dom.submitButton.classList.toggle("disabled", isLoading);
+    if (dom.loader) dom.loader.classList.toggle("d-none", !isLoading);
+  }
+
+  function persistSession(session) {
+    if (!session || !session.access_token || !session.refresh_token) return;
+    try {
+      localStorage.setItem(
+        "supabase.auth.session",
+        JSON.stringify({
+          access_token: session.access_token,
+          refresh_token: session.refresh_token,
+        })
+      );
+    } catch (e) {
+      console.warn("Unable to persist auth session", e);
+    }
+  }
+
+  function persistLocalSession(identifier) {
+    try {
+      localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ user: identifier, createdAt: Date.now() }));
+    } catch (e) {
+      console.warn("Unable to persist local session", e);
+    }
+  }
+
+  function hasLocalSession() {
+    try {
+      return Boolean(localStorage.getItem(LOCAL_SESSION_KEY));
+    } catch {
+      return false;
+    }
+  }
+
+  async function restorePersistedSession() {
+    if (!supabaseClient) return;
+    try {
+      const savedSession = localStorage.getItem("supabase.auth.session");
+      if (!savedSession) return;
+      const parsed = JSON.parse(savedSession);
+      if (parsed && parsed.access_token && parsed.refresh_token) {
+        await supabaseClient.auth.setSession({
+          access_token: parsed.access_token,
+          refresh_token: parsed.refresh_token,
+        });
+      }
+    } catch (e) {
+      console.warn("Unable to restore saved session", e);
+    }
+  }
+
+  async function getSupabaseSession() {
+    if (!supabaseClient) return null;
+    const sessionResponse = await supabaseClient.auth.getSession();
+    if (sessionResponse.error) {
+      showFeedback(sessionResponse.error.message || "Unable to check session state.");
+      return null;
+    }
+    return sessionResponse.data && sessionResponse.data.session ? sessionResponse.data.session : null;
+  }
+
+  async function guardAccess() {
+    supabaseClient = resolveSupabaseClient();
+    if (!supabaseClient && !hasLocalSession()) {
+      showFeedback("Client Supabase indisponible.");
+      setShell("login");
+      return false;
+    }
+
+    await restorePersistedSession();
+    const session = await getSupabaseSession();
+    if (session && session.access_token) {
+      setShell("dashboard");
+      return true;
+    }
+
+    if (hasLocalSession()) {
+      setShell("dashboard");
+      return true;
+    }
+
+    setShell("login");
+    return false;
+  }
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    if (!dom.usernameField || !dom.passwordField) return;
+
+    const identifier = dom.usernameField.value.trim();
+    const password = dom.passwordField.value.trim();
+    const adminUser = authConfig.adminUser || "";
+    const adminPassword = authConfig.adminPassword || "";
+
+    if (!identifier || !password) {
+      showFeedback("Merci de saisir vos identifiants.");
+      return;
+    }
+
+    const matchesAdmin = adminUser && adminPassword && identifier === adminUser && password === adminPassword;
+
+    showFeedback("", "");
+    setLoading(true);
+
+    try {
+      if (matchesAdmin) {
+        persistLocalSession(identifier);
+        showToast("Connexion réussie.", "success");
+        setShell("dashboard");
+        await loadDashboard();
+        return;
+      }
+
+      supabaseClient = resolveSupabaseClient();
+      if (!supabaseClient) {
+        showFeedback("Supabase client is not available.");
+        return;
+      }
+
+      const response = await supabaseClient.auth.signInWithPassword({
+        email: identifier,
+        password: password,
+      });
+
+      if (response.error) {
+        showFeedback(response.error.message || "Identifiants invalides.");
+        return;
+      }
+
+      if (response.data && response.data.session) {
+        persistSession(response.data.session);
+        showToast("Connexion réussie.", "success");
+        setShell("dashboard");
+        await loadDashboard();
+      } else {
+        showFeedback("Aucune session renvoyée. Merci de réessayer.");
+      }
+    } catch (error) {
+      showFeedback(error.message || "Unexpected error during sign-in.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadDashboard() {
+    setShell("dashboard");
+    setStatus("Chargement des vidéos en cours…", "info");
     wireEvents();
 
     let videos = [];
     let source = "Supabase";
 
     try {
+      supabaseClient = resolveSupabaseClient();
       videos = await fetchVideosFromSupabase();
       if (!videos.length) {
-        setStatus("No Supabase rows returned. Showing fallback data.", "warning");
+        setStatus("Aucune vidéo Supabase. Affichage des données de secours.", "warning");
         videos = fallbackVideos;
         source = "fallback";
       } else {
@@ -330,218 +620,25 @@
     const normalized = normalizeVideos(videos);
     updateState(normalized, source);
     renderDashboard();
+    state.dashboardLoaded = true;
+  }
+
+  async function initAuthFlow() {
+    if (dom.loginForm) {
+      dom.loginForm.addEventListener("submit", handleLogin);
+    }
+    const allowed = await guardAccess();
+    if (allowed) {
+      await loadDashboard();
+    }
+  }
+
+  function init() {
+    wireEvents();
+    initAuthFlow().catch((error) => {
+      showFeedback(error.message || "Failed to initialize authentication.");
+    });
   }
 
   init();
 })();
-(function ($) {
-  "use strict";
-
-  var fullHeight = function () {
-    $(".js-fullheight").css("height", $(window).height());
-    $(window).resize(function () {
-      $(".js-fullheight").css("height", $(window).height());
-    });
-  };
-  fullHeight();
-
-  $(".toggle-password").click(function () {
-    $(this).toggleClass("fa-eye fa-eye-slash");
-    var input = $($(this).attr("toggle"));
-    if (input.attr("type") === "password") {
-      input.attr("type", "text");
-    } else {
-      input.attr("type", "password");
-    }
-  });
-
-  var supabaseClient = window.supabaseClient;
-  var authConfig = window.authConfig || {};
-  var loginForm = $(".signin-form");
-  var usernameField = $("#username-field");
-  var passwordField = $("#password-field");
-  var submitButton = $("#login-submit");
-  var loader = $("#sign-in-loader");
-  var feedback = $("#login-feedback");
-  var toastContainer = $("#toast-container");
-  var isLoginPage = loginForm.length > 0;
-  var adminEmail = authConfig.adminUser || "";
-  var adminPassword = authConfig.adminPassword || "";
-  var dashboardPath = authConfig.dashboardPath || "dashboard.html";
-  var loginPath = authConfig.loginPath || "index.html";
-
-  var setLoading = function (isLoading) {
-    if (!loginForm.length) return;
-    var formControls = loginForm.find("input, button, a");
-    formControls.prop("disabled", isLoading);
-    submitButton.toggleClass("disabled", isLoading);
-    if (isLoading) {
-      loader.removeClass("d-none");
-    } else {
-      loader.addClass("d-none");
-    }
-  };
-
-  var showFeedback = function (message, variant) {
-    if (!feedback.length) return;
-    if (!message) {
-      feedback.addClass("d-none").removeClass("alert-danger alert-success alert-info");
-      feedback.text("");
-      return;
-    }
-    var intent = variant || "danger";
-    feedback
-      .removeClass("d-none alert-danger alert-success alert-info")
-      .addClass("alert-" + intent);
-    feedback.text(message);
-  };
-
-  var showToast = function (message, variant) {
-    if (!toastContainer.length || !message) return;
-    var intent = variant || "info";
-    var toastId = "toast-" + Date.now();
-    var toast = $(
-      '<div class="toast align-items-center text-white bg-' +
-        intent +
-        ' border-0" role="alert" aria-live="assertive" aria-atomic="true" data-delay="3000" id="' +
-        toastId +
-        '">' +
-        '<div class="d-flex">' +
-        '<div class="toast-body">' +
-        message +
-        "</div>" +
-        '<button type="button" class="ml-2 mb-1 close text-white" data-dismiss="toast" aria-label="Close">' +
-        '<span aria-hidden="true">&times;</span>' +
-        "</button>" +
-        "</div>" +
-        "</div>"
-    );
-    toastContainer.append(toast);
-    toast.toast({ delay: 3000 });
-    toast.toast("show");
-    toast.on("hidden.bs.toast", function () {
-      toast.remove();
-    });
-  };
-
-  var persistSession = function (session) {
-    if (!session || !session.access_token || !session.refresh_token) return;
-    try {
-      localStorage.setItem(
-        "supabase.auth.session",
-        JSON.stringify({
-          access_token: session.access_token,
-          refresh_token: session.refresh_token,
-        })
-      );
-    } catch (e) {
-      console.warn("Unable to persist auth session", e);
-    }
-  };
-
-  var restorePersistedSession = async function () {
-    if (!supabaseClient) return;
-    try {
-      var savedSession = localStorage.getItem("supabase.auth.session");
-      if (!savedSession) return;
-      var parsed = JSON.parse(savedSession);
-      if (parsed && parsed.access_token && parsed.refresh_token) {
-        await supabaseClient.auth.setSession({
-          access_token: parsed.access_token,
-          refresh_token: parsed.refresh_token,
-        });
-      }
-    } catch (e) {
-      console.warn("Unable to restore saved session", e);
-    }
-  };
-
-  var redirectTo = function (path) {
-    window.location.href = path;
-  };
-
-  var guardAccess = async function () {
-    if (!supabaseClient) {
-      showFeedback("Unable to initialize authentication client.");
-      return;
-    }
-
-    await restorePersistedSession();
-    var sessionResponse = await supabaseClient.auth.getSession();
-    if (sessionResponse.error) {
-      showFeedback(sessionResponse.error.message || "Unable to check session state.");
-      return;
-    }
-
-    var session = sessionResponse.data && sessionResponse.data.session;
-    if (session && session.access_token) {
-      if (isLoginPage) {
-        showToast("Session restored. Redirecting…", "info");
-        redirectTo(dashboardPath);
-      }
-      return;
-    }
-
-    if (!isLoginPage) {
-      redirectTo(loginPath);
-    }
-  };
-
-  var handleLogin = async function (event) {
-    event.preventDefault();
-    if (!supabaseClient) {
-      showFeedback("Supabase client is not available.");
-      return;
-    }
-
-    var email = adminEmail || usernameField.val().trim();
-    var password = adminPassword || passwordField.val();
-
-    if (!email || !password) {
-      showFeedback("Missing credentials. Please contact an administrator.");
-      return;
-    }
-
-    showFeedback("", "");
-    setLoading(true);
-    try {
-      var response = await supabaseClient.auth.signInWithPassword({
-        email: email,
-        password: password,
-      });
-
-      if (response.error) {
-        showFeedback(response.error.message || "Unable to sign in.");
-        return;
-      }
-
-      if (response.data && response.data.session) {
-        persistSession(response.data.session);
-        showToast("Signed in successfully.", "success");
-        setTimeout(function () {
-          redirectTo(dashboardPath);
-        }, 800);
-      } else {
-        showFeedback("No session returned. Please try again.");
-      }
-    } catch (error) {
-      showFeedback(error.message || "Unexpected error during sign-in.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  var initAuthFlow = async function () {
-    if (supabaseClient && adminEmail && !usernameField.val()) {
-      usernameField.val(adminEmail);
-    }
-    if (isLoginPage) {
-      loginForm.on("submit", handleLogin);
-    }
-    await guardAccess();
-  };
-
-  initAuthFlow().catch(function (error) {
-    showFeedback(error.message || "Failed to initialize authentication.");
-  });
-})(jQuery);

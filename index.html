@@ -1,144 +1,104 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
   <head>
-    <title>TheTrendScope Dashboard</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-
-    <link href="https://fonts.googleapis.com/css?family=Inter:300,400,500,600,700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
-    <link rel="stylesheet" href="css/style.css">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TheTrendScope · Radar viral</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <link rel="stylesheet" href="css/dashboard.css" />
   </head>
-  <body class="dashboard-body">
-    <nav class="navbar navbar-expand-lg navbar-dark dashboard-nav">
-      <div class="container-fluid">
-        <div class="d-flex align-items-center">
-          <div class="brand-dot mr-2"></div>
-          <span class="navbar-brand mb-0 h4">TheTrendScope</span>
+  <body>
+    <header>
+      <div class="header-inner">
+        <div class="brand">
+          <img src="UPDATE_LOGO.png" alt="TheTrendScope" style="width:36px;height:36px;border-radius:12px;object-fit:cover" />
+          <span>Trending Radar</span>
         </div>
-        <div class="ml-auto d-flex align-items-center">
-          <div class="text-light small mr-3 threshold-text">Alerts trigger when views/hr ≥ 500,000</div>
-          <button id="alertPanelToggle" class="btn btn-sm btn-outline-light position-relative">
-            <span class="mr-2">Alerts</span>
-            <span class="badge badge-danger badge-pill" id="alert-count-badge">0</span>
-          </button>
+        <div class="actions">
+          <button class="btn secondary" id="refresh-stats-btn"><i class="fa fa-chart-line"></i> Rafraîchir les stats</button>
+          <button class="btn" id="refresh-btn"><i class="fa fa-refresh"></i> Rafraîchir</button>
         </div>
       </div>
-    </nav>
+    </header>
 
-    <div class="container-fluid py-4">
-      <div class="row">
-        <div class="col-lg-9">
-          <div class="d-flex flex-wrap align-items-center mb-3">
-            <div class="mr-auto">
-              <h2 class="text-white mb-1">Trending radar</h2>
-              <p class="text-muted mb-0">Supabase-backed feed with real-time alerting</p>
-            </div>
-            <div class="text-right">
-              <div class="text-muted small" id="last-refreshed">&nbsp;</div>
-            </div>
-          </div>
-          <div id="data-status" class="alert alert-info d-none" role="alert"></div>
-          <div class="row" id="video-grid"></div>
+    <main>
+      <section class="notification-center">
+        <h3>Notifications</h3>
+        <div class="notifications"></div>
+      </section>
+
+      <section class="controls">
+        <div class="control">
+          <label for="filter-category">Catégorie</label>
+          <select id="filter-category">
+            <option value="all">Toutes</option>
+            <option value="nourriture">nourriture</option>
+            <option value="voiture">voiture</option>
+            <option value="business">business</option>
+            <option value="drôle">drôle</option>
+            <option value="influenceurs">influenceurs</option>
+            <option value="gaming">gaming</option>
+            <option value="sport">sport</option>
+            <option value="musique">musique</option>
+          </select>
         </div>
-        <div class="col-lg-3">
-          <div class="card shadow-sm alert-feed-card">
-            <div class="card-header d-flex align-items-center justify-content-between">
-              <div class="d-flex align-items-center">
-                <span class="mr-2">Alert feed</span>
-                <span class="badge badge-danger badge-pill" id="alert-feed-count">0</span>
-              </div>
-              <span class="text-muted small">🔥 High velocity</span>
-            </div>
-            <div class="card-body p-0">
-              <ul class="list-group list-group-flush" id="alert-list"></ul>
-              <div class="p-3 text-center text-muted small d-none" id="alert-empty">No alerting videos yet.</div>
-            </div>
-          </div>
-          <div class="card shadow-sm mt-3 info-card">
-            <div class="card-body">
-              <h6 class="text-uppercase text-muted mb-2">How alerts are computed</h6>
-              <p class="mb-2 small">Videos cross the alert threshold when <strong>views_per_hour ≥ 500,000</strong> or when Supabase already marks them as <code>alert</code>.</p>
-              <p class="mb-0 small text-muted">State lives in Supabase rows so flags persist across sessions. The dashboard simply derives UI state from that data.</p>
-            </div>
-          </div>
+        <div class="control">
+          <label for="filter-region">Région</label>
+          <select id="filter-region">
+            <option value="all">Toutes</option>
+            <option value="FR">FR</option>
+            <option value="US">US</option>
+            <option value="ES">ES</option>
+            <option value="Global">Global</option>
+          </select>
         </div>
+        <div class="control">
+          <label for="filter-language">Langue</label>
+          <select id="filter-language">
+            <option value="all">Toutes</option>
+            <option value="fr">fr</option>
+            <option value="en">en</option>
+            <option value="es">es</option>
+          </select>
+        </div>
+      </section>
+
+      <section id="video-grid" class="grid"></section>
+
+      <section class="notification-center" id="history-section">
+        <h3>Historique</h3>
+        <div class="notifications" id="history-list"></div>
+      </section>
+    </main>
+
+    <div class="toast-container"></div>
+
+    <div class="page-loader">
+      <div class="panel">
+        <div class="loader"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+        Mise à jour des tendances…
       </div>
     </div>
 
-    <div id="alert-panel" class="alert-panel shadow-lg">
-      <div class="d-flex align-items-center justify-content-between mb-3">
-        <div>
-          <div class="text-muted text-uppercase small">Live alerts</div>
-          <h5 class="mb-0 text-white">High-velocity videos</h5>
-        </div>
-        <button type="button" class="close text-white" aria-label="Close" id="alertPanelClose">
-          <span aria-hidden="true">&times;</span>
+    <div id="preview-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:50;align-items:center;justify-content:center;padding:20px;">
+      <div style="max-width:960px;width:100%;background:#0f172a;border-radius:16px;border:1px solid rgba(255,255,255,0.08);box-shadow:0 24px 60px rgba(0,0,0,0.5);overflow:hidden;position:relative;">
+        <button id="preview-close" style="position:absolute;top:10px;right:10px;background:rgba(255,255,255,0.08);border:none;color:#fff;border-radius:10px;padding:6px 10px;cursor:pointer;">
+          <i class="fa fa-times"></i>
         </button>
+        <div style="padding:16px 16px 0;color:#e5e7eb;">
+          <h3 id="preview-title" style="margin:0 0 10px;">Prévisualisation</h3>
+        </div>
+        <div style="position:relative;padding-top:56.25%;">
+          <iframe id="preview-frame" src="" allowfullscreen style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;"></iframe>
+        </div>
       </div>
-      <div id="alert-panel-list" class="alert-panel-list"></div>
     </div>
 
-    <script>
-      window.SUPABASE_URL = 'https://ltxjjnzsphhprykuwwye.supabase.co';
-      window.SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0eGpqbnpzcGhocHJ5a3V3d3llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3ODgyMDYsImV4cCI6MjA4MDM2NDIwNn0.AR4MHCGyhBDpX3BTBIqQh0qap6tOLUHfuP8HMofF3Sk';
-    </script>
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="js/jquery.min.js"></script>
-    <script src="js/popper.js"></script>
-    <script src="js/bootstrap.min.js"></script>
-    <script src="js/main.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.48.0/dist/umd/supabase.min.js" integrity="sha256-3qDl1n2YNDdNYsM8oFb6kP3UjObb8VcS3EWAaAqsxPQ=" crossorigin="anonymous"></script>
+    <script src="js/supabaseClient.js"></script>
+    <script src="js/dashboard.js"></script>
   </body>
-	</head>
-	<body class="img js-fullheight" style="background-image: url(images/bg.jpg);">
-	<section class="ftco-section">
-		<div class="container">
-			<div class="row justify-content-center">
-				<div class="col-md-6 text-center mb-5">
-					<h2 class="heading-section">Login #10</h2>
-				</div>
-			</div>
-			<div class="row justify-content-center">
-				<div class="col-md-6 col-lg-4">
-					<div class="login-wrap p-0">
-		      	<h3 class="mb-4 text-center">Have an account?</h3>
-						<div id="login-feedback" class="alert d-none" role="alert"></div>
-		      	<form action="#" class="signin-form" data-redirect="dashboard.html" novalidate>
-		      		<div class="form-group">
-		      			<input id="username-field" type="text" class="form-control" placeholder="Username" autocomplete="username" required>
-		      		</div>
-	            <div class="form-group">
-	              <input id="password-field" type="password" class="form-control" placeholder="Password" autocomplete="current-password" required>
-	              <span toggle="#password-field" class="fa fa-fw fa-eye field-icon toggle-password"></span>
-	            </div>
-							<div id="sign-in-loader" class="text-center text-light small mb-2 d-none">
-								<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-								<span class="sr-only">Signing in...</span>
-								<span class="ml-2">Signing in...</span>
-							</div>
-	            <div class="form-group">
-	            	<button id="login-submit" type="submit" class="form-control btn btn-primary submit px-3">Sign In</button>
-	            </div>
-	            <div class="form-group d-md-flex">
-	            	<div class="w-100 text-md-right">
-									<a href="#" style="color: #fff" aria-disabled="true">Need help?</a>
-								</div>
-	            </div>
-	          </form>
-		      </div>
-				</div>
-			</div>
-		</div>
-	</section>
-
-	<div id="toast-container" class="position-fixed" style="top: 20px; right: 20px; z-index: 1060;"></div>
-
-	<script src="js/jquery.min.js"></script>
-  <script src="js/popper.js"></script>
-  <script src="js/bootstrap.min.js"></script>
-	<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.48.0/dist/umd/supabase.min.js" integrity="sha256-3qDl1n2YNDdNYsM8oFb6kP3UjObb8VcS3EWAaAqsxPQ=" crossorigin="anonymous"></script>
-	<script src="js/supabaseClient.js"></script>
-  <script src="js/main.js"></script>
-
-	</body>
 </html>
