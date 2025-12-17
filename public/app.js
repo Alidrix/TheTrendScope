@@ -34,6 +34,7 @@ function setLoading(isLoading) {
 }
 
 async function fetchJson(url, options = {}) {
+  return fetch(url, options);
   const headers = options.headers || {};
   if (sessionToken) {
     headers['x-session-token'] = sessionToken;
@@ -345,6 +346,9 @@ async function bootstrap() {
   restoreTheme();
   renderCategoryChips();
   bindEvents();
+  await refreshVideos();
+  await loadHistory();
+  await loadNotifications();
   if (sessionToken) {
     updateSessionStatus('Session mémorisée', true);
     await refreshVideos();

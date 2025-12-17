@@ -14,6 +14,7 @@ Radar en temps réel pour détecter les vidéos YouTube les plus virales (FR/US/
 - 📤 **Exports** : boutons CSV/JSON pour l’historique.
 - 🌗 **Theme toggle** : clair/sombre, navbar glass, badges soft, loader overlay, toasts.
 - ▶️ **Prévisualisation** : modal d’embed YouTube.
+- 📦 **Supabase ready** : Synchro `videos` et `video_history` via REST (service role). Repli local sur `data/store.json` si les variables d’environnement ne sont pas définies.
 - 📦 **Supabase ready** : Synchro `videos`, `video_history`, `admins` via REST (service role). Repli local sur `data/store.json` si les variables d’environnement ne sont pas définies.
 
 ## 🏗️ Structure
@@ -29,6 +30,15 @@ data/store.json # stockage local (généré au besoin)
 ```
 
 ## ⚙️ Configuration
+
+Créer un fichier `.env` à la racine (copie `.env.example`) :
+
+```
+YOUTUBE_API_KEY=...votre_cle_youtube...
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+PORT=4443
+```
 
 Créer un fichier `.env` à la racine (le repo en contient déjà un exemple) :
 
@@ -92,6 +102,7 @@ on conflict (username) do update set password = excluded.password;
 
 1) Installer Node.js (>=18). Aucun paquet externe n’est nécessaire.
 
+2) Renseigner `.env` avec votre clé YouTube (Supabase en option).
 2) Renseigner `.env` avec vos clés Supabase et YouTube.
 
 3) Démarrer :
@@ -100,6 +111,7 @@ npm start
 # http://localhost:4443
 ```
 
+4) Lancez les rafraîchissements directement depuis l’UI (aucune authentification requise).
 4) Connectez-vous via l’UI (identifiants Supabase `admins`).
 
 ## 🔌 API résumée

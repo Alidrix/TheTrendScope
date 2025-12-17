@@ -29,6 +29,7 @@ const categoryMap = {
 
 const languageRegion = { fr: 'FR', en: 'US', es: 'ES' };
 
+let store = loadStore();
 const sessions = new Map();
 let store = loadStore();
 ensureDefaultAdmin();
@@ -55,6 +56,7 @@ function loadStore() {
   } catch (err) {
     console.error('Impossible de charger le store local', err);
   }
+  return { videos: [], history: [], notifications: [] };
   return { videos: [], history: [], notifications: [], admins: [] };
 }
 
@@ -95,6 +97,7 @@ function respondJson(res, status, payload) {
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type'
     'Access-Control-Allow-Headers': 'Content-Type, x-session-token'
   });
   res.end(JSON.stringify(payload));
@@ -343,6 +346,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Content-Type',
       'Access-Control-Allow-Headers': 'Content-Type, x-session-token',
       'Access-Control-Allow-Methods': 'GET,POST,OPTIONS'
     });
