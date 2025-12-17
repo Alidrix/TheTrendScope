@@ -86,6 +86,46 @@ create table if not exists public.admins (
   created_at timestamptz not null default timezone('utc', now())
 );
 
+create or replace view public.video_feed as
+select
+  v.id,
+  v.youtube_id,
+  v.title,
+  v.channel_title,
+  v.thumbnail_url,
+  v.published_at,
+  latest.views,
+  latest.likes,
+  latest.comments,
+  latest.collected_at,
+  case
+    when previous.collected_at is null then null
+    when extract(epoch from (latest.collected_at - previous.collected_at)) <= 0 then null
+    else greatest(
+      0,
+      round(
+        (latest.views - previous.views) * 3600.0 /
+        extract(epoch from (latest.collected_at - previous.collected_at))
+      )
+    )
+  end as views_per_hour
+from public.videos v
+left join lateral (
+  select s.*
+  from public.stats_snapshots s
+  where s.video_id = v.id
+  order by s.collected_at desc
+  limit 1
+) latest on true
+left join lateral (
+  select s.*
+  from public.stats_snapshots s
+  where s.video_id = v.id
+    and s.collected_at < coalesce(latest.collected_at, now())
+  order by s.collected_at desc
+  limit 1
+) previous on true;
+
 ${adminSql}
 `.trim();
 }
