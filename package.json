@@ -1,9 +1,0 @@
-{
-  "name": "the-trend-scope",
-  "version": "1.0.0",
-  "description": "Dashboard viral YouTube + Supabase",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  }
-}
