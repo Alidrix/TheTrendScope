@@ -11,4 +11,18 @@
     "lib": ["es2023", "dom"]
   },
   "include": ["server/**/*.ts"]
+    "target": "es2021",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "outDir": "dist",
+    "rootDir": ".",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "lib": ["es2021", "dom"],
+    "resolveJsonModule": true
+  },
+  "include": ["server/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }
