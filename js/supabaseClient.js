@@ -30,6 +30,9 @@
       : undefined) ||
     fallbackEnv.ADMIN_PASSWORD;
 
+  safeGlobal.SUPABASE_URL = supabaseUrl;
+  safeGlobal.SUPABASE_ANON_KEY = supabaseAnonKey;
+
   if (!safeGlobal.supabase || typeof safeGlobal.supabase.createClient !== "function") {
     console.error("Supabase library failed to load.");
     return;

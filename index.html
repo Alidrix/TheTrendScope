@@ -26,119 +26,111 @@
       </div>
     </nav>
 
-    <div class="container-fluid py-4">
-      <div class="row">
-        <div class="col-lg-9">
-          <div class="d-flex flex-wrap align-items-center mb-3">
-            <div class="mr-auto">
-              <h2 class="text-white mb-1">Trending radar</h2>
-              <p class="text-muted mb-0">Supabase-backed feed with real-time alerting</p>
-            </div>
-            <div class="text-right">
-              <div class="text-muted small" id="last-refreshed">&nbsp;</div>
-            </div>
-          </div>
-          <div id="data-status" class="alert alert-info d-none" role="alert"></div>
-          <div class="row" id="video-grid"></div>
-        </div>
-        <div class="col-lg-3">
-          <div class="card shadow-sm alert-feed-card">
-            <div class="card-header d-flex align-items-center justify-content-between">
-              <div class="d-flex align-items-center">
-                <span class="mr-2">Alert feed</span>
-                <span class="badge badge-danger badge-pill" id="alert-feed-count">0</span>
+    <main id="dashboard-shell" class="d-none">
+      <div class="container-fluid py-4">
+        <div class="row">
+          <div class="col-lg-9">
+            <div class="d-flex flex-wrap align-items-center mb-3">
+              <div class="mr-auto">
+                <h2 class="text-white mb-1">Trending radar</h2>
+                <p class="text-muted mb-0">Supabase-backed feed with real-time alerting</p>
               </div>
-              <span class="text-muted small">🔥 High velocity</span>
+              <div class="text-right">
+                <div class="text-muted small" id="last-refreshed">&nbsp;</div>
+              </div>
             </div>
-            <div class="card-body p-0">
-              <ul class="list-group list-group-flush" id="alert-list"></ul>
-              <div class="p-3 text-center text-muted small d-none" id="alert-empty">No alerting videos yet.</div>
-            </div>
+            <div id="data-status" class="alert alert-info d-none" role="alert"></div>
+            <div class="row" id="video-grid"></div>
           </div>
-          <div class="card shadow-sm mt-3 info-card">
-            <div class="card-body">
-              <h6 class="text-uppercase text-muted mb-2">How alerts are computed</h6>
-              <p class="mb-2 small">Videos cross the alert threshold when <strong>views_per_hour ≥ 500,000</strong> or when Supabase already marks them as <code>alert</code>.</p>
-              <p class="mb-0 small text-muted">State lives in Supabase rows so flags persist across sessions. The dashboard simply derives UI state from that data.</p>
+          <div class="col-lg-3">
+            <div class="card shadow-sm alert-feed-card">
+              <div class="card-header d-flex align-items-center justify-content-between">
+                <div class="d-flex align-items-center">
+                  <span class="mr-2">Alert feed</span>
+                  <span class="badge badge-danger badge-pill" id="alert-feed-count">0</span>
+                </div>
+                <span class="text-muted small">🔥 High velocity</span>
+              </div>
+              <div class="card-body p-0">
+                <ul class="list-group list-group-flush" id="alert-list"></ul>
+                <div class="p-3 text-center text-muted small d-none" id="alert-empty">No alerting videos yet.</div>
+              </div>
+            </div>
+            <div class="card shadow-sm mt-3 info-card">
+              <div class="card-body">
+                <h6 class="text-uppercase text-muted mb-2">How alerts are computed</h6>
+                <p class="mb-2 small">Videos cross the alert threshold when <strong>views_per_hour ≥ 500,000</strong> or when Supabase already marks them as <code>alert</code>.</p>
+                <p class="mb-0 small text-muted">State lives in Supabase rows so flags persist across sessions. The dashboard simply derives UI state from that data.</p>
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
 
-    <div id="alert-panel" class="alert-panel shadow-lg">
-      <div class="d-flex align-items-center justify-content-between mb-3">
-        <div>
-          <div class="text-muted text-uppercase small">Live alerts</div>
-          <h5 class="mb-0 text-white">High-velocity videos</h5>
+      <div id="alert-panel" class="alert-panel shadow-lg">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+          <div>
+            <div class="text-muted text-uppercase small">Live alerts</div>
+            <h5 class="mb-0 text-white">High-velocity videos</h5>
+          </div>
+          <button type="button" class="close text-white" aria-label="Close" id="alertPanelClose">
+            <span aria-hidden="true">&times;</span>
+          </button>
         </div>
-        <button type="button" class="close text-white" aria-label="Close" id="alertPanelClose">
-          <span aria-hidden="true">&times;</span>
-        </button>
+        <div id="alert-panel-list" class="alert-panel-list"></div>
       </div>
-      <div id="alert-panel-list" class="alert-panel-list"></div>
-    </div>
+    </main>
 
-    <script>
-      window.SUPABASE_URL = 'https://ltxjjnzsphhprykuwwye.supabase.co';
-      window.SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0eGpqbnpzcGhocHJ5a3V3d3llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3ODgyMDYsImV4cCI6MjA4MDM2NDIwNn0.AR4MHCGyhBDpX3BTBIqQh0qap6tOLUHfuP8HMofF3Sk';
-    </script>
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <section id="login-shell" class="img js-fullheight" style="background-image: url(images/bg.jpg);">
+      <div class="ftco-section">
+        <div class="container">
+          <div class="row justify-content-center">
+            <div class="col-md-6 text-center mb-5">
+              <h2 class="heading-section">Authentification requise</h2>
+              <p class="text-light">Connectez-vous pour consulter le radar des tendances.</p>
+            </div>
+          </div>
+          <div class="row justify-content-center">
+            <div class="col-md-6 col-lg-4">
+              <div class="login-wrap p-0">
+                <h3 class="mb-4 text-center">Votre espace sécurisé</h3>
+                <div id="login-feedback" class="alert d-none" role="alert"></div>
+                <form action="#" class="signin-form" novalidate>
+                  <div class="form-group">
+                    <input id="username-field" type="text" class="form-control" placeholder="Email ou identifiant" autocomplete="username" required>
+                  </div>
+                  <div class="form-group">
+                    <input id="password-field" type="password" class="form-control" placeholder="Mot de passe" autocomplete="current-password" required>
+                    <span toggle="#password-field" class="fa fa-fw fa-eye field-icon toggle-password"></span>
+                  </div>
+                  <div id="sign-in-loader" class="text-center text-light small mb-2 d-none">
+                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                    <span class="sr-only">Signing in...</span>
+                    <span class="ml-2">Connexion en cours...</span>
+                  </div>
+                  <div class="form-group">
+                    <button id="login-submit" type="submit" class="form-control btn btn-primary submit px-3">Se connecter</button>
+                  </div>
+                  <div class="form-group d-md-flex">
+                    <div class="w-100 text-md-right">
+                      <span class="text-light small">Accès réservé aux administrateurs.</span>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div id="toast-container" class="position-fixed" style="top: 20px; right: 20px; z-index: 1060;"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.48.0/dist/umd/supabase.min.js" integrity="sha256-3qDl1n2YNDdNYsM8oFb6kP3UjObb8VcS3EWAaAqsxPQ=" crossorigin="anonymous"></script>
     <script src="js/jquery.min.js"></script>
     <script src="js/popper.js"></script>
     <script src="js/bootstrap.min.js"></script>
+    <script src="js/supabaseClient.js"></script>
     <script src="js/main.js"></script>
   </body>
-	</head>
-	<body class="img js-fullheight" style="background-image: url(images/bg.jpg);">
-	<section class="ftco-section">
-		<div class="container">
-			<div class="row justify-content-center">
-				<div class="col-md-6 text-center mb-5">
-					<h2 class="heading-section">Login #10</h2>
-				</div>
-			</div>
-			<div class="row justify-content-center">
-				<div class="col-md-6 col-lg-4">
-					<div class="login-wrap p-0">
-		      	<h3 class="mb-4 text-center">Have an account?</h3>
-						<div id="login-feedback" class="alert d-none" role="alert"></div>
-		      	<form action="#" class="signin-form" data-redirect="dashboard.html" novalidate>
-		      		<div class="form-group">
-		      			<input id="username-field" type="text" class="form-control" placeholder="Username" autocomplete="username" required>
-		      		</div>
-	            <div class="form-group">
-	              <input id="password-field" type="password" class="form-control" placeholder="Password" autocomplete="current-password" required>
-	              <span toggle="#password-field" class="fa fa-fw fa-eye field-icon toggle-password"></span>
-	            </div>
-							<div id="sign-in-loader" class="text-center text-light small mb-2 d-none">
-								<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-								<span class="sr-only">Signing in...</span>
-								<span class="ml-2">Signing in...</span>
-							</div>
-	            <div class="form-group">
-	            	<button id="login-submit" type="submit" class="form-control btn btn-primary submit px-3">Sign In</button>
-	            </div>
-	            <div class="form-group d-md-flex">
-	            	<div class="w-100 text-md-right">
-									<a href="#" style="color: #fff" aria-disabled="true">Need help?</a>
-								</div>
-	            </div>
-	          </form>
-		      </div>
-				</div>
-			</div>
-		</div>
-	</section>
-
-	<div id="toast-container" class="position-fixed" style="top: 20px; right: 20px; z-index: 1060;"></div>
-
-	<script src="js/jquery.min.js"></script>
-  <script src="js/popper.js"></script>
-  <script src="js/bootstrap.min.js"></script>
-	<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.48.0/dist/umd/supabase.min.js" integrity="sha256-3qDl1n2YNDdNYsM8oFb6kP3UjObb8VcS3EWAaAqsxPQ=" crossorigin="anonymous"></script>
-	<script src="js/supabaseClient.js"></script>
-  <script src="js/main.js"></script>
-
-	</body>
 </html>
