@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Passbolt User Importer</title>
+  <style>
+    body {
+      background: #0d1b2a;
+      color: #fff;
+      font-family: Inter, Arial, sans-serif;
+      margin: 0;
+      padding: 0 24px 24px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 18px 0;
+      border-bottom: 1px solid #415a77;
+      margin-bottom: 24px;
+    }
+
+    h2, h3 { margin: 0; }
+
+    .card {
+      background: #1b263b;
+      padding: 16px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+    }
+
+    button {
+      background: #f4a261;
+      border: none;
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      margin-left: 8px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    td, th {
+      border-bottom: 1px solid #415a77;
+      padding: 10px;
+      text-align: left;
+    }
+
+    #status {
+      margin-top: 10px;
+      color: #e9c46a;
+      white-space: pre-wrap;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h2>Passbolt User Import</h2>
+    <span>Dashboard CSV</span>
+  </header>
+
+  <section class="card">
+    <h3>Import CSV</h3>
+    <p>Colonnes attendues: <code>Email, FirstName, LastName</code></p>
+    <input type="file" id="file" accept=".csv">
+    <button onclick="upload()">Importer</button>
+    <div id="status"></div>
+  </section>
+
+  <section class="card">
+    <h3>Utilisateurs</h3>
+    <button onclick="loadUsers()">Rafraîchir</button>
+    <table>
+      <thead>
+        <tr>
+          <th>Email</th>
+          <th>Prénom</th>
+          <th>Nom</th>
+        </tr>
+      </thead>
+      <tbody id="users"></tbody>
+    </table>
+  </section>
+
+  <script>
+    async function upload() {
+      const fileInput = document.getElementById('file');
+      const file = fileInput.files[0];
+      const status = document.getElementById('status');
+
+      if (!file) {
+        status.textContent = 'Sélectionne un fichier CSV.';
+        return;
+      }
+
+      const form = new FormData();
+      form.append('file', file);
+
+      const response = await fetch('/api/import', { method: 'POST', body: form });
+      const data = await response.json();
+
+      status.textContent = `Import terminé (HTTP ${response.status})\n${JSON.stringify(data, null, 2)}`;
+      if (response.ok) {
+        await loadUsers();
+      }
+    }
+
+    async function loadUsers() {
+      const response = await fetch('/api/users');
+      const data = await response.json();
+      const usersBody = Array.isArray(data?.body) ? data.body : [];
+      const table = document.getElementById('users');
+      table.innerHTML = '';
+
+      usersBody.forEach((u) => {
+        const firstName = u?.profile?.first_name ?? '';
+        const lastName = u?.profile?.last_name ?? '';
+        table.innerHTML += `<tr><td>${u.username ?? ''}</td><td>${firstName}</td><td>${lastName}</td></tr>`;
+      });
+    }
+
+    loadUsers();
+  </script>
+</body>
+</html>
