@@ -5,7 +5,7 @@ services:
     build: ./api
     container_name: passbolt-import-api
     ports:
-      - "9090:9090"
+      - "${IMPORTER_API_PORT:-9090}:9090"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -17,7 +17,8 @@ services:
     image: nginx:alpine
     container_name: passbolt-import-ui
     ports:
-      - "9091:80"
+      - "${IMPORTER_UI_PORT:-9091}:80"
     volumes:
       - ./ui:/usr/share/nginx/html:ro
+      - ./ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     restart: unless-stopped

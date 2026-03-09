@@ -16,6 +16,7 @@
     th, td { text-align: left; border-bottom: 1px solid #415a77; padding: 8px; }
     .ok { color: #70e000; }
     .ko { color: #ff6b6b; }
+    .logs { margin-top: 10px; background: #0a1422; border: 1px solid #415a77; border-radius: 8px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; height: 220px; overflow-y: auto; white-space: pre-wrap; }
     #toast { position: fixed; right: 16px; bottom: 16px; background: #1b263b; border: 1px solid #415a77; padding: 10px 12px; border-radius: 8px; display: none; }
   </style>
 </head>
@@ -29,6 +30,8 @@
       <button id="uploadBtn">Importer</button>
       <div class="progress"><div id="bar" class="bar"></div></div>
       <p id="summary" class="muted"></p>
+      <h3>Commandes & logs</h3>
+      <div id="logs" class="logs"></div>
     </div>
 
     <div class="card">
@@ -49,11 +52,39 @@
     const summary = document.getElementById('summary');
     const bar = document.getElementById('bar');
     const toast = document.getElementById('toast');
+    const logsBox = document.getElementById('logs');
 
     function showToast(message) {
       toast.textContent = message;
       toast.style.display = 'block';
       setTimeout(() => { toast.style.display = 'none'; }, 2500);
+    }
+
+    function appendLog(prefix, message) {
+      logsBox.textContent += `[${new Date().toLocaleTimeString()}] ${prefix} ${message}\n`;
+      logsBox.scrollTop = logsBox.scrollHeight;
+    }
+
+    function renderResults(payload) {
+      const rows = payload.results || [];
+      rows.forEach((row) => {
+        const ok = row.returncode === 0;
+        const detail = row.stderr || row.stdout || '-';
+        resultsBody.insertAdjacentHTML('beforeend', `<tr><td>${row.email || ''}</td><td class="${ok ? 'ok' : 'ko'}">${ok ? 'OK' : 'ERREUR'}</td><td>${detail}</td></tr>`);
+      });
+      summary.textContent = `Import terminé: ${payload.success || 0}/${payload.total || 0}`;
+      bar.style.width = '100%';
+      showToast('Import terminé');
+    }
+
+    async function importFallback(form) {
+      appendLog('INFO', 'Endpoint /import-stream indisponible (404), fallback vers /import');
+      const response = await fetch('/import', { method: 'POST', body: form });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || 'Erreur import');
+      }
+      renderResults(payload);
     }
 
     uploadBtn.addEventListener('click', async () => {
@@ -63,27 +94,67 @@
         return;
       }
 
-      bar.style.width = '20%';
+      uploadBtn.disabled = true;
+      bar.style.width = '10%';
       resultsBody.innerHTML = '';
+      logsBox.textContent = '';
       summary.textContent = 'Import en cours...';
+      appendLog('INFO', `Fichier: ${file.name}`);
 
       const form = new FormData();
       form.append('file', file);
 
-      const response = await fetch('http://'+location.hostname+':9090/import', { method: 'POST', body: form });
-      bar.style.width = '80%';
-      const payload = await response.json();
+      try {
+        const response = await fetch('/import-stream', { method: 'POST', body: form });
+        if (response.status === 404) {
+          await importFallback(form);
+          return;
+        }
+        if (!response.ok || !response.body) {
+          const message = await response.text();
+          throw new Error(message || 'Réponse invalide');
+        }
 
-      const rows = payload.results || [];
-      rows.forEach((row) => {
-        const ok = row.returncode === 0;
-        const detail = row.stderr || row.stdout || '-';
-        resultsBody.insertAdjacentHTML('beforeend', `<tr><td>${row.email || ''}</td><td class="${ok ? 'ok' : 'ko'}">${ok ? 'OK' : 'ERREUR'}</td><td>${detail}</td></tr>`);
-      });
+        bar.style.width = '30%';
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let finalPayload = null;
 
-      summary.textContent = `Import terminé: ${payload.success || 0}/${payload.total || 0}`;
-      bar.style.width = '100%';
-      showToast(response.ok ? 'Import terminé' : 'Erreur import');
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const entry = JSON.parse(line);
+            if (entry.type === 'command') appendLog('CMD', entry.message);
+            if (entry.type === 'stdout') appendLog('OUT', entry.message);
+            if (entry.type === 'stderr') appendLog('ERR', entry.message);
+            if (entry.type === 'log') appendLog('INFO', entry.message);
+            if (entry.type === 'final') finalPayload = entry.payload;
+          }
+          bar.style.width = '75%';
+        }
+
+        if (finalPayload) {
+          renderResults(finalPayload);
+        } else {
+          throw new Error('Aucun résultat final reçu');
+        }
+      } catch (error) {
+        appendLog('ERR', error.message || String(error));
+        summary.textContent = 'Import interrompu (voir logs)';
+        showToast('Erreur import');
+        bar.style.width = '100%';
+      } finally {
+        uploadBtn.disabled = false;
+      }
     });
   </script>
 </body>
