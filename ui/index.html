@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Passbolt CSV Import</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #0d1b2a; color: #fff; }
+    .wrap { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+    .card { background: #1b263b; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    button { background: #f4a261; border: 0; border-radius: 8px; color: #fff; padding: 10px 14px; cursor: pointer; }
+    .muted { color: #b9c5d4; }
+    .progress { width: 100%; height: 10px; border-radius: 10px; background: #31445e; overflow: hidden; margin-top: 10px; }
+    .bar { height: 100%; width: 0%; background: #2a9d8f; transition: width 0.2s; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
+    th, td { text-align: left; border-bottom: 1px solid #415a77; padding: 8px; }
+    .ok { color: #70e000; }
+    .ko { color: #ff6b6b; }
+    #toast { position: fixed; right: 16px; bottom: 16px; background: #1b263b; border: 1px solid #415a77; padding: 10px 12px; border-radius: 8px; display: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2>Passbolt CSV Importer</h2>
+    <p class="muted">CSV attendu: <code>email,firstname,lastname,role</code></p>
+
+    <div class="card">
+      <input type="file" id="file" accept=".csv" />
+      <button id="uploadBtn">Importer</button>
+      <div class="progress"><div id="bar" class="bar"></div></div>
+      <p id="summary" class="muted"></p>
+    </div>
+
+    <div class="card">
+      <h3>Résultats</h3>
+      <table>
+        <thead><tr><th>Email</th><th>Status</th><th>Détails</th></tr></thead>
+        <tbody id="results"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script>
+    const fileInput = document.getElementById('file');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const resultsBody = document.getElementById('results');
+    const summary = document.getElementById('summary');
+    const bar = document.getElementById('bar');
+    const toast = document.getElementById('toast');
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 2500);
+    }
+
+    uploadBtn.addEventListener('click', async () => {
+      const file = fileInput.files[0];
+      if (!file) {
+        showToast('Sélectionne un CSV');
+        return;
+      }
+
+      bar.style.width = '20%';
+      resultsBody.innerHTML = '';
+      summary.textContent = 'Import en cours...';
+
+      const form = new FormData();
+      form.append('file', file);
+
+      const response = await fetch('http://'+location.hostname+':9090/import', { method: 'POST', body: form });
+      bar.style.width = '80%';
+      const payload = await response.json();
+
+      const rows = payload.results || [];
+      rows.forEach((row) => {
+        const ok = row.returncode === 0;
+        const detail = row.stderr || row.stdout || '-';
+        resultsBody.insertAdjacentHTML('beforeend', `<tr><td>${row.email || ''}</td><td class="${ok ? 'ok' : 'ko'}">${ok ? 'OK' : 'ERREUR'}</td><td>${detail}</td></tr>`);
+      });
+
+      summary.textContent = `Import terminé: ${payload.success || 0}/${payload.total || 0}`;
+      bar.style.width = '100%';
+      showToast(response.ok ? 'Import terminé' : 'Erreur import');
+    });
+  </script>
+</body>
+</html>

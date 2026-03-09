@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  importer-api:
+    build: ./api
+    container_name: passbolt-import-api
+    ports:
+      - "9090:9090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - PASSBOLT_CONTAINER=${PASSBOLT_CONTAINER:-passbolt-passbolt-1}
+      - PASSBOLT_CLI_PATH=${PASSBOLT_CLI_PATH:-/usr/share/php/passbolt/bin/cake}
+    restart: unless-stopped
+
+  importer-ui:
+    image: nginx:alpine
+    container_name: passbolt-import-ui
+    ports:
+      - "9091:80"
+    volumes:
+      - ./ui:/usr/share/nginx/html:ro
+    restart: unless-stopped
