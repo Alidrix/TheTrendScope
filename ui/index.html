@@ -77,12 +77,28 @@
       showToast('Import terminé');
     }
 
+    async function parseJsonResponse(response) {
+      const contentType = response.headers.get('content-type') || '';
+      const body = await response.text();
+
+      if (!contentType.includes('application/json')) {
+        const clean = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        throw new Error(clean || `Réponse non JSON (HTTP ${response.status})`);
+      }
+
+      try {
+        return JSON.parse(body);
+      } catch (_) {
+        throw new Error(`JSON invalide reçu du serveur (HTTP ${response.status})`);
+      }
+    }
+
     async function importFallback(form) {
       appendLog('INFO', 'Endpoint /import-stream indisponible (404), fallback vers /import');
       const response = await fetch('/import', { method: 'POST', body: form });
-      const payload = await response.json();
+      const payload = await parseJsonResponse(response);
       if (!response.ok) {
-        throw new Error(payload.error || 'Erreur import');
+        throw new Error(payload.error || `Erreur import (HTTP ${response.status})`);
       }
       renderResults(payload);
     }
@@ -131,8 +147,12 @@
           buffer = lines.pop() || '';
 
           for (const line of lines) {
-            if (!line.trim()) continue;
-            const entry = JSON.parse(line);
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            if (!trimmed.startsWith('{')) {
+              throw new Error(`Flux non JSON reçu: ${trimmed.slice(0, 160)}`);
+            }
+            const entry = JSON.parse(trimmed);
             if (entry.type === 'command') appendLog('CMD', entry.message);
             if (entry.type === 'stdout') appendLog('OUT', entry.message);
             if (entry.type === 'stderr') appendLog('ERR', entry.message);

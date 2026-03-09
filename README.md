@@ -66,3 +66,5 @@ docker compose up -d --build
 ```
 
 - L'UI bascule automatiquement sur `/import` si `/import-stream` est indisponible, mais sans logs temps réel.
+
+- Si l'UI affiche `JSON.parse: unexpected character`, cela signifie que le proxy renvoie une page HTML (souvent 404) au lieu de JSON. Vérifiez `ui/nginx.conf` puis relancez `docker compose up -d --build`.
