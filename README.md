@@ -33,6 +33,11 @@ user1@example.com,Jean,Dupont,user
 user2@example.com,Marie,Durand,admin
 ```
 
+## Fichier CSV d'exemple (5 utilisateurs)
+
+Un exemple prêt à l'emploi est disponible ici : `examples/users-5.csv`.
+Vous pouvez l'uploader directement dans l'UI.
+
 ## Endpoint API
 
 - `POST /import` : envoie un `multipart/form-data` avec `file=<csv>`.
