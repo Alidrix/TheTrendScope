@@ -6,11 +6,12 @@ services:
     container_name: passbolt-import-api
     volumes:
       - ./data/uploads:/app/uploads
+      - /etc/passbolt/gpg:/etc/passbolt/gpg:ro
       - ./backend/keys:/app/keys:ro
     environment:
       - PASSBOLT_URL=${PASSBOLT_URL:-https://passbolt.karapasse.fr}
-      - PASSBOLT_USER_ID=${PASSBOLT_USER_ID:-<ADMIN_UUID>}
-      - PASSBOLT_PRIVATE_KEY_PATH=${PASSBOLT_PRIVATE_KEY_PATH:-/app/keys/private.asc}
+      - PASSBOLT_USER_ID=${PASSBOLT_USER_ID:-27147404-1ef4-45ef-9a82-a53f5407d10f}
+      - PASSBOLT_PRIVATE_KEY_PATH=${PASSBOLT_PRIVATE_KEY_PATH:-/etc/passbolt/gpg/serverkey_private.asc}
       - PASSBOLT_GPG_PASSPHRASE=${PASSBOLT_GPG_PASSPHRASE:-}
       - PASSBOLT_VERIFY_TLS=${PASSBOLT_VERIFY_TLS:-true}
     networks:
