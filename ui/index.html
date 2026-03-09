@@ -97,11 +97,19 @@
     async function importFallback(form, signal) {
       appendLog('INFO', 'Endpoint /import-stream indisponible (404), fallback vers /import');
       const response = await fetch('/import', { method: 'POST', body: form, signal });
-      const payload = await parseJsonResponse(response);
-      if (!response.ok) {
-        throw new Error(payload.error || `Erreur import (HTTP ${response.status})`);
+      try {
+        const payload = await parseJsonResponse(response);
+        if (!response.ok) {
+          throw new Error(payload.error || `Erreur import (HTTP ${response.status})`);
+        }
+        renderResults(payload);
+      } catch (error) {
+        if (response.status >= 500) {
+          appendLog('ERR', 'Le endpoint /import répond en 500 (API probablement ancienne ou en erreur).');
+          appendLog('DBG', 'Action recommandée: docker compose down && docker compose up -d --build');
+        }
+        throw error;
       }
-      renderResults(payload);
     }
 
 
@@ -116,10 +124,18 @@
     }
 
     async function runAutoDebug() {
+      appendLog('INFO', 'Auto-debug déclenché');
       try {
         const response = await fetch('/debug/import');
+        if (response.status === 404) {
+          appendLog('DBG', 'Endpoint /debug/import indisponible sur cette version API.');
+          const healthResp = await fetch('/health');
+          const healthPayload = await parseJsonResponse(healthResp);
+          appendLog('DBG', `Health status=${healthPayload.status} container=${healthPayload.container} cli=${healthPayload.cli_path}`);
+          appendLog('DBG', 'Action recommandée: mettre à jour/rebuild l'API pour activer /debug/import et /import-stream.');
+          return;
+        }
         const payload = await parseJsonResponse(response);
-        appendLog('INFO', 'Auto-debug déclenché');
         const checks = payload?.diagnostics?.checks || [];
         checks.forEach((check) => {
           appendLog('DBG', `${check.name}: ${check.ok ? 'OK' : 'KO'} ${check.selected || ''}`.trim());

@@ -82,3 +82,12 @@ docker compose up -d --build
 - Avant chaque import, l'UI lance un **ping** (`/health`). Si KO, l'import ne démarre pas.
 - Un **timeout global de 60s** est appliqué côté UI.
 - En cas de timeout/erreur, un **auto-debug** (`/debug/import`) se lance et affiche checks/recommandations dans les logs.
+
+
+- Si vous voyez `fallback vers /import` puis `500 Internal Server Error`, cela indique généralement une API ancienne/en échec. Relancez en rebuild et vérifiez les logs API :
+
+```bash
+docker compose down
+docker compose up -d --build
+docker logs -n 200 passbolt-import-api
+```
