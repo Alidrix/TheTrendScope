@@ -23,6 +23,7 @@ sudo docker compose up -d
 
 - `PASSBOLT_CONTAINER` (défaut: `passbolt-passbolt-1`) : nom du conteneur Passbolt cible.
 - `PASSBOLT_CLI_PATH` (défaut: `/usr/share/php/passbolt/bin/cake`) : chemin vers la commande `cake` dans le conteneur Passbolt.
+- `IMPORT_COMMAND_TIMEOUT` (défaut: `60`) : timeout (en secondes) d'une commande CLI d'import pour éviter un blocage infini.
 
 ## Format CSV attendu
 
@@ -35,6 +36,7 @@ user2@example.com,Marie,Durand,admin
 ## Endpoint API
 
 - `POST /import` : envoie un `multipart/form-data` avec `file=<csv>`.
+- `POST /import-stream` : même import mais en flux NDJSON pour afficher les commandes/logs en temps réel dans l'UI.
 - `GET /health` : vérification rapide du service.
 
 ### Personnaliser les ports (éviter les conflits)
