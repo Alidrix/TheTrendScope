@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    container_name: passbolt-import-api
+    volumes:
+      - ./data/uploads:/app/uploads
+      - /etc/passbolt/gpg:/etc/passbolt/gpg:ro
+      - ./backend/keys:/app/keys:ro
+    environment:
+      - PASSBOLT_URL=${PASSBOLT_URL:-https://passbolt.karapasse.fr}
+      - PASSBOLT_USER_ID=${PASSBOLT_USER_ID:-27147404-1ef4-45ef-9a82-a53f5407d10f}
+      - PASSBOLT_PRIVATE_KEY_PATH=${PASSBOLT_PRIVATE_KEY_PATH:-/etc/passbolt/gpg/serverkey_private.asc}
+      - PASSBOLT_GPG_PASSPHRASE=${PASSBOLT_GPG_PASSPHRASE:-}
+      - PASSBOLT_VERIFY_TLS=${PASSBOLT_VERIFY_TLS:-true}
+    networks:
+      - passbolt-net
+
+  frontend:
+    build: ./frontend
+    container_name: passbolt-import-ui
+    networks:
+      - passbolt-net
+
+  nginx:
+    image: nginx:stable
+    container_name: passbolt-import-nginx
+    ports:
+      - "9001:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - passbolt-net
+
+networks:
+  passbolt-net:
