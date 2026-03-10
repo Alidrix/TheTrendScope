@@ -91,3 +91,16 @@ sudo docker compose down
 sudo docker compose up -d --build
 sudo docker logs -n 200 passbolt-import-api
 ```
+
+## Logos UI (favicon + logo principal)
+
+Pour utiliser **vos 2 logos personnalisés** sans bloquer la création de PR :
+
+- Placez vos fichiers dans `ui/assets/` :
+  - `favicon.png` (icone navigateur)
+  - `passbolt.png` (logo UI)
+- L'UI est configurée avec fallback automatique :
+  - si les PNG existent, ils sont utilisés,
+  - sinon l'UI repasse automatiquement sur les SVG (`favicon.svg`, `logo-mark.svg`, `logo-full.svg`).
+
+Cela permet de garder une UI brandée en local/prod, tout en restant compatible avec des outils CI/PR qui n'acceptent pas les diffs binaires.
