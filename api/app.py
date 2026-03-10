@@ -15,7 +15,7 @@ PASSBOLT_CONTAINER = os.getenv("PASSBOLT_CONTAINER", "passbolt-passbolt-1")
 PASSBOLT_CLI_PATH = os.getenv("PASSBOLT_CLI_PATH", "/usr/share/php/passbolt/bin/cake")
 IMPORT_COMMAND_TIMEOUT = int(os.getenv("IMPORT_COMMAND_TIMEOUT", "60"))
 IMPORT_TOTAL_TIMEOUT = int(os.getenv("IMPORT_TOTAL_TIMEOUT", "60"))
-DOCKER_COMMAND_PREFIX = ["sudo", "docker"]
+DOCKER_COMMAND_PREFIX = ["/usr/bin/docker"]
 
 SAFE_FIELD = re.compile(r"^[A-Za-z0-9@._+\-']+$")
 SAFE_ROLE = {"user", "admin"}
