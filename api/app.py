@@ -1,10 +1,12 @@
 import csv
+import io
 import json
 import os
 import re
 import shlex
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from threading import Lock
 from typing import Any
 
 import docker
@@ -16,11 +18,18 @@ PASSBOLT_CONTAINER = os.getenv("PASSBOLT_CONTAINER", "passbolt-passbolt-1")
 PASSBOLT_CLI_PATH = os.getenv("PASSBOLT_CLI_PATH", "/usr/share/php/passbolt/bin/cake")
 IMPORT_COMMAND_TIMEOUT = int(os.getenv("IMPORT_COMMAND_TIMEOUT", "60"))
 IMPORT_TOTAL_TIMEOUT = int(os.getenv("IMPORT_TOTAL_TIMEOUT", "60"))
+GROUP_LIST_COMMAND = os.getenv("PASSBOLT_GROUP_LIST_COMMAND", "passbolt list_groups")
+GROUP_CREATE_COMMAND = os.getenv("PASSBOLT_GROUP_CREATE_COMMAND", "passbolt create_group -n {group}")
+GROUP_ASSIGN_COMMAND = os.getenv("PASSBOLT_GROUP_ASSIGN_COMMAND", "passbolt add_user_to_group -u {email} -g {group}")
+ROLLBACK_COMMAND = os.getenv("PASSBOLT_ROLLBACK_COMMAND", "")
 
 docker_client = docker.from_env()
 
 SAFE_FIELD = re.compile(r"^[A-Za-z0-9@._+\-']+$")
+SAFE_GROUP = re.compile(r"^[A-Za-z0-9 _@.\-']+$")
 SAFE_ROLE = {"user", "admin"}
+PENDING_ASSIGNMENTS: list[dict[str, Any]] = []
+PENDING_LOCK = Lock()
 
 
 def _sanitize_value(name: str, value: str) -> str:
@@ -29,6 +38,15 @@ def _sanitize_value(name: str, value: str) -> str:
         raise ValueError(f"{name} is empty")
     if not SAFE_FIELD.match(cleaned):
         raise ValueError(f"{name} contains invalid characters")
+    return cleaned
+
+
+def _sanitize_group_name(value: str) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        raise ValueError("group is empty")
+    if not SAFE_GROUP.match(cleaned):
+        raise ValueError("group contains invalid characters")
     return cleaned
 
 
@@ -155,22 +173,8 @@ def diagnose_environment() -> dict[str, Any]:
     return diagnostics
 
 
-def create_user(email: str, first: str, last: str, role: str, container_name: str, cli_path: str) -> dict[str, Any]:
-    email = _sanitize_value("email", email)
-    first = _sanitize_value("firstname", first)
-    last = _sanitize_value("lastname", last)
-    role = _sanitize_role(role)
-
-    shell_command = (
-        f"{shlex.quote(cli_path)} passbolt register_user "
-        f"-u {shlex.quote(email)} "
-        f"-f {shlex.quote(first)} "
-        f"-l {shlex.quote(last)} "
-        f"-r {shlex.quote(role)}"
-    )
-
+def _run_shell_command(container_name: str, cli_path: str, shell_command: str) -> dict[str, Any]:
     command = ["su", "-m", "-c", shell_command, "-s", "/bin/sh", "www-data"]
-
     command_str = (
         f"docker-sdk exec {shlex.quote(container_name)} -- "
         f"su -m -c {shlex.quote(shell_command)} -s /bin/sh www-data"
@@ -192,7 +196,6 @@ def create_user(email: str, first: str, last: str, role: str, container_name: st
                 run = future.result(timeout=IMPORT_COMMAND_TIMEOUT)
             except TimeoutError:
                 return {
-                    "email": email,
                     "returncode": -2,
                     "stdout": "",
                     "stderr": f"command timeout after {IMPORT_COMMAND_TIMEOUT}s",
@@ -201,7 +204,6 @@ def create_user(email: str, first: str, last: str, role: str, container_name: st
 
         stdout, stderr = run.output if isinstance(run.output, tuple) else (run.output, b"")
         return {
-            "email": email,
             "returncode": run.exit_code,
             "stdout": _decode_output(stdout),
             "stderr": _decode_output(stderr),
@@ -209,7 +211,6 @@ def create_user(email: str, first: str, last: str, role: str, container_name: st
         }
     except Exception as error:
         return {
-            "email": email,
             "returncode": -3,
             "stdout": "",
             "stderr": f"unexpected execution error: {error}",
@@ -217,78 +218,357 @@ def create_user(email: str, first: str, last: str, role: str, container_name: st
         }
 
 
-def _parse_rows() -> tuple[list[dict[str, str]], Any]:
-    if "file" not in request.files:
+def parse_groups(raw_value: str) -> list[str]:
+    unique_groups: list[str] = []
+    seen: set[str] = set()
+    for item in (raw_value or "").split(";"):
+        cleaned = item.strip()
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        unique_groups.append(cleaned)
+    return unique_groups
+
+
+def parse_csv_rows(file_storage: Any) -> tuple[list[dict[str, Any]], Any]:
+    if not file_storage:
         return [], (jsonify({"error": "missing file field"}), 400)
 
-    file = request.files["file"]
-    if not file.filename or not file.filename.lower().endswith(".csv"):
+    if not file_storage.filename or not file_storage.filename.lower().endswith(".csv"):
         return [], (jsonify({"error": "please upload a .csv file"}), 400)
 
-    decoded = file.read().decode("utf-8", errors="replace").splitlines()
-    reader = csv.DictReader(decoded)
+    decoded = file_storage.read().decode("utf-8", errors="replace")
+    reader = csv.DictReader(io.StringIO(decoded))
 
     required = {"email", "firstname", "lastname", "role"}
-    if not reader.fieldnames or not required.issubset({h.strip().lower() for h in reader.fieldnames}):
+    normalized_headers = {h.strip().lower() for h in (reader.fieldnames or []) if h}
+    if not required.issubset(normalized_headers):
         return [], (jsonify({"error": "csv headers must include email, firstname, lastname, role"}), 400)
 
-    rows = [{k.strip().lower(): (v or "") for k, v in raw_row.items()} for raw_row in reader]
+    rows: list[dict[str, Any]] = []
+    for raw_row in reader:
+        normalized: dict[str, Any] = {}
+        for key, value in raw_row.items():
+            normalized[(key or "").strip().lower()] = (value or "").strip()
+        normalized["groups"] = parse_groups(normalized.get("groups", ""))
+        rows.append(normalized)
     return rows, None
 
 
-def _process_rows(rows: list[dict[str, str]], container: str, cli_path: str, emit: Any = None) -> dict[str, Any]:
-    results: list[dict[str, Any]] = []
-    success = 0
-    started = time.time()
+def preview_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    preview: list[dict[str, Any]] = []
+    valid_count = 0
 
-    for index, row in enumerate(rows, start=1):
+    for idx, row in enumerate(rows, start=1):
+        errors: list[str] = []
+
+        for field in ("email", "firstname", "lastname"):
+            if not (row.get(field) or "").strip():
+                errors.append(f"{field} is empty")
+
+        role = (row.get("role") or "").strip().lower()
+        if role not in SAFE_ROLE:
+            errors.append("role must be user or admin")
+
+        groups = row.get("groups", [])
+        safe_groups: list[str] = []
+        for group in groups:
+            try:
+                safe_groups.append(_sanitize_group_name(group))
+            except ValueError as error:
+                errors.append(str(error))
+
+        valid = len(errors) == 0
+        if valid:
+            valid_count += 1
+
+        preview.append(
+            {
+                "line": idx,
+                "email": row.get("email", ""),
+                "firstname": row.get("firstname", ""),
+                "lastname": row.get("lastname", ""),
+                "role": row.get("role", ""),
+                "groups": safe_groups,
+                "valid": valid,
+                "errors": errors,
+            }
+        )
+
+    return {
+        "total_rows": len(rows),
+        "valid_rows": valid_count,
+        "invalid_rows": len(rows) - valid_count,
+        "rows": preview,
+    }
+
+
+def create_user(email: str, first: str, last: str, role: str, container_name: str, cli_path: str) -> dict[str, Any]:
+    email = _sanitize_value("email", email)
+    first = _sanitize_value("firstname", first)
+    last = _sanitize_value("lastname", last)
+    role = _sanitize_role(role)
+
+    shell_command = (
+        f"{shlex.quote(cli_path)} passbolt register_user "
+        f"-u {shlex.quote(email)} "
+        f"-f {shlex.quote(first)} "
+        f"-l {shlex.quote(last)} "
+        f"-r {shlex.quote(role)}"
+    )
+    result = _run_shell_command(container_name, cli_path, shell_command)
+    result["email"] = email
+    return result
+
+
+class GroupService:
+    def __init__(self, container_name: str, cli_path: str) -> None:
+        self.container_name = container_name
+        self.cli_path = cli_path
+
+    def list_groups(self) -> dict[str, Any]:
+        shell_command = f"{shlex.quote(self.cli_path)} {GROUP_LIST_COMMAND}"
+        result = _run_shell_command(self.container_name, self.cli_path, shell_command)
+        groups: set[str] = set()
+        if result["returncode"] == 0:
+            out = result.get("stdout", "")
+            try:
+                payload = json.loads(out) if out else []
+                if isinstance(payload, list):
+                    for item in payload:
+                        name = (item.get("name") if isinstance(item, dict) else "") or ""
+                        if name:
+                            groups.add(name.strip())
+            except Exception:
+                for line in out.splitlines():
+                    guess = line.strip(" -\t")
+                    if guess:
+                        groups.add(guess)
+        return {"result": result, "groups": groups}
+
+    def create_group(self, group_name: str) -> dict[str, Any]:
+        group_name = _sanitize_group_name(group_name)
+        shell_command = f"{shlex.quote(self.cli_path)} {GROUP_CREATE_COMMAND.format(group=shlex.quote(group_name))}"
+        return _run_shell_command(self.container_name, self.cli_path, shell_command)
+
+    def assign_user_to_group(self, email: str, group_name: str) -> dict[str, Any]:
+        group_name = _sanitize_group_name(group_name)
+        email = _sanitize_value("email", email)
+        shell_command = (
+            f"{shlex.quote(self.cli_path)} "
+            f"{GROUP_ASSIGN_COMMAND.format(email=shlex.quote(email), group=shlex.quote(group_name))}"
+        )
+        return _run_shell_command(self.container_name, self.cli_path, shell_command)
+
+
+def _extract_activation_link(stdout: str) -> str | None:
+    match = re.search(r"https?://\S+", stdout or "")
+    return match.group(0) if match else None
+
+
+def _critical_error(result: dict[str, Any]) -> bool:
+    stderr = (result.get("stderr") or "").lower()
+    return result.get("returncode", 1) not in (0,) and "already" not in stderr and "exists" not in stderr
+
+
+def _append_pending(entry: dict[str, Any]) -> None:
+    with PENDING_LOCK:
+        PENDING_ASSIGNMENTS.append(entry)
+
+
+def rollback_batch(created_users: list[str], container: str, cli_path: str) -> dict[str, Any]:
+    if not created_users:
+        return {"status": "no-op", "rolled_back": [], "manual_required": False}
+
+    if not ROLLBACK_COMMAND:
+        return {
+            "status": "manual-required",
+            "rolled_back": [],
+            "manual_required": True,
+            "message": "rollback command not configured",
+            "users": created_users,
+        }
+
+    rolled_back: list[str] = []
+    errors: list[dict[str, str]] = []
+    for email in created_users:
+        shell_command = f"{shlex.quote(cli_path)} {ROLLBACK_COMMAND.format(email=shlex.quote(email))}"
+        result = _run_shell_command(container, cli_path, shell_command)
+        if result.get("returncode") == 0:
+            rolled_back.append(email)
+        else:
+            errors.append({"email": email, "error": result.get("stderr", "rollback failed")})
+
+    return {
+        "status": "done" if not errors else "partial",
+        "rolled_back": rolled_back,
+        "manual_required": bool(errors),
+        "errors": errors,
+    }
+
+
+def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rollback_on_error: bool, emit: Any = None) -> dict[str, Any]:
+    started = time.time()
+    group_service = GroupService(container, cli_path)
+    preview = preview_rows(rows)
+
+    valid_rows = [row for row in preview["rows"] if row["valid"]]
+    total_valid = len(valid_rows)
+    results: list[dict[str, Any]] = []
+    created_users: list[str] = []
+    created_groups_in_batch: set[str] = set()
+    known_groups: set[str] = set()
+    groups_created_total = 0
+    groups_assigned_total = 0
+    groups_deferred_total = 0
+
+    list_result = group_service.list_groups()
+    if list_result["result"]["returncode"] == 0:
+        known_groups = {g.lower(): g for g in list_result["groups"]}
+    elif emit:
+        emit({"type": "stderr", "message": "Impossible de lister les groupes, création best effort"})
+
+    if emit:
+        emit({"type": "progress", "payload": {"current": 0, "total": max(total_valid, 1), "percent": 0, "stage": "preview"}})
+
+    critical_error = False
+
+    for index, row in enumerate(preview["rows"], start=1):
         if time.time() - started > IMPORT_TOTAL_TIMEOUT:
-            timeout_message = f"global import timeout after {IMPORT_TOTAL_TIMEOUT}s"
-            if emit:
-                emit({"type": "stderr", "message": timeout_message})
-            results.append(
-                {
-                    "email": row.get("email", ""),
-                    "returncode": -4,
-                    "stderr": timeout_message,
-                    "stdout": "",
-                    "command": "",
-                }
-            )
+            critical_error = True
+            results.append({
+                "email": row.get("email", ""),
+                "user_create_status": "error",
+                "groups_requested": row.get("groups", []),
+                "groups_created": [],
+                "groups_assigned": [],
+                "groups_deferred": row.get("groups", []),
+                "errors": [f"global import timeout after {IMPORT_TOTAL_TIMEOUT}s"],
+            })
             break
 
-        email = row.get("email", "")
+        if not row["valid"]:
+            results.append({
+                "email": row.get("email", ""),
+                "user_create_status": "error",
+                "groups_requested": row.get("groups", []),
+                "groups_created": [],
+                "groups_assigned": [],
+                "groups_deferred": [],
+                "errors": row.get("errors", []),
+            })
+            continue
+
         if emit:
-            emit({"type": "log", "message": f"[{index}/{len(rows)}] Start: {email}"})
+            emit({"type": "progress", "payload": {"current": index, "total": len(rows), "percent": int((index / max(len(rows), 1)) * 100), "stage": "create-user"}})
 
-        try:
-            result = create_user(
-                email,
-                row.get("firstname", ""),
-                row.get("lastname", ""),
-                row.get("role", ""),
-                container,
-                cli_path,
-            )
+        email = row["email"]
+        user_result = create_user(email, row["firstname"], row["lastname"], row["role"], container, cli_path)
+
+        user_payload: dict[str, Any] = {
+            "email": email,
+            "user_create_status": "success" if user_result["returncode"] == 0 else "error",
+            "created_user_activation_link": _extract_activation_link(user_result.get("stdout", "")),
+            "groups_requested": row.get("groups", []),
+            "groups_created": [],
+            "groups_assigned": [],
+            "groups_deferred": [],
+            "errors": [],
+            "raw": user_result,
+        }
+
+        if user_result["returncode"] == 0:
+            created_users.append(email)
+        else:
+            user_payload["errors"].append(user_result.get("stderr") or "user creation failed")
+            if _critical_error(user_result):
+                critical_error = True
+
+        for group in row.get("groups", []):
+            normalized = group.lower()
+            if normalized not in known_groups:
+                if emit:
+                    emit({"type": "progress", "payload": {"current": index, "total": len(rows), "percent": int((index / max(len(rows), 1)) * 100), "stage": "create-group"}})
+                create_result = group_service.create_group(group)
+                if create_result["returncode"] == 0 or "already" in (create_result.get("stderr", "").lower()):
+                    if create_result["returncode"] == 0:
+                        groups_created_total += 1
+                        user_payload["groups_created"].append(group)
+                        created_groups_in_batch.add(group)
+                    known_groups[normalized] = group
+                else:
+                    user_payload["errors"].append(f"group {group}: {create_result.get('stderr', 'creation failed')}")
+                    if _critical_error(create_result):
+                        critical_error = True
+                    continue
+
             if emit:
-                emit({"type": "command", "message": result["command"]})
-            if result.get("stdout"):
-                emit({"type": "stdout", "message": result["stdout"]})
-            if result.get("stderr"):
-                emit({"type": "stderr", "message": result["stderr"]})
+                emit({"type": "progress", "payload": {"current": index, "total": len(rows), "percent": int((index / max(len(rows), 1)) * 100), "stage": "assign-group"}})
 
-            if result["returncode"] == 0:
-                success += 1
+            if user_result["returncode"] != 0:
+                user_payload["groups_deferred"].append(group)
+                groups_deferred_total += 1
+                _append_pending({"email": email, "group": group, "reason": "user creation failed", "status": "deferred"})
+                continue
 
-            results.append(result)
+            assign_result = group_service.assign_user_to_group(email, group)
+            if assign_result["returncode"] == 0:
+                user_payload["groups_assigned"].append(group)
+                groups_assigned_total += 1
+            else:
+                reason = assign_result.get("stderr") or "user not active yet"
+                user_payload["groups_deferred"].append(group)
+                groups_deferred_total += 1
+                _append_pending({"email": email, "group": group, "reason": reason, "status": "deferred"})
 
-        except Exception as error:
-            message = str(error)
-            if emit:
-                emit({"type": "stderr", "message": message})
-            results.append({"email": email, "returncode": -1, "stderr": message, "stdout": "", "command": ""})
+        if user_payload["user_create_status"] == "success" and user_payload["groups_deferred"]:
+            user_payload["group_assignment_status"] = "deferred"
+            user_payload["reason"] = "user not active yet"
+        elif user_payload["user_create_status"] == "success":
+            user_payload["group_assignment_status"] = "assigned"
+        else:
+            user_payload["group_assignment_status"] = "not-created"
 
-    return {"status": "import finished", "total": len(results), "success": success, "results": results}
+        results.append(user_payload)
+
+        if rollback_on_error and critical_error:
+            break
+
+    rollback = None
+    final_status = "success"
+    errors_count = sum(1 for item in results if item.get("user_create_status") != "success")
+
+    if critical_error and rollback_on_error:
+        rollback = rollback_batch(created_users, container, cli_path)
+        if rollback.get("manual_required"):
+            final_status = "rollback_required_manual"
+        else:
+            final_status = "rolled_back"
+    elif errors_count:
+        final_status = "partial"
+
+    if emit:
+        emit({"type": "progress", "payload": {"current": len(results), "total": max(len(rows), 1), "percent": 100, "stage": "done"}})
+
+    return {
+        "status": final_status,
+        "total": len(results),
+        "success": sum(1 for item in results if item.get("user_create_status") == "success"),
+        "results": results,
+        "preview": preview,
+        "summary": {
+            "users_created": len(created_users),
+            "groups_created": groups_created_total,
+            "groups_assigned": groups_assigned_total,
+            "groups_deferred": groups_deferred_total,
+            "errors": errors_count,
+            "created_groups_in_batch": sorted(created_groups_in_batch),
+        },
+        "rollback": rollback,
+    }
 
 
 @app.route("/health", methods=["GET"])
@@ -321,87 +601,94 @@ def debug_import() -> Any:
     return jsonify({"status": "debug", "diagnostics": diagnose_environment()})
 
 
+@app.route("/preview", methods=["POST"])
+def preview_csv() -> Any:
+    rows, error = parse_csv_rows(request.files.get("file"))
+    if error:
+        return error
+    return jsonify(preview_rows(rows))
+
+
 @app.route("/import", methods=["POST"])
 def import_csv() -> Any:
-    rows, error = _parse_rows()
+    rows, error = parse_csv_rows(request.files.get("file"))
     if error:
         return error
 
+    rollback_on_error = str(request.form.get("rollback_on_error", "false")).lower() == "true"
     diagnostics = diagnose_environment()
     container = diagnostics.get("resolved_container", PASSBOLT_CONTAINER)
     cli_path = diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH)
 
-    payload = _process_rows(rows, container, cli_path)
+    payload = _process_rows(rows, container, cli_path, rollback_on_error=rollback_on_error)
     payload["diagnostics"] = diagnostics
     return jsonify(payload)
 
 
 @app.route("/import-stream", methods=["POST"])
 def import_csv_stream() -> Any:
-    rows, error = _parse_rows()
+    rows, error = parse_csv_rows(request.files.get("file"))
     if error:
         return error
 
+    rollback_on_error = str(request.form.get("rollback_on_error", "false")).lower() == "true"
     diagnostics = diagnose_environment()
     container = diagnostics.get("resolved_container", PASSBOLT_CONTAINER)
     cli_path = diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH)
 
     @stream_with_context
     def generate() -> Any:
-        started = time.time()
-        results: list[dict[str, Any]] = []
-        success = 0
-
         yield json.dumps({"type": "log", "message": f"Import started for {len(rows)} row(s)"}, ensure_ascii=False) + "\n"
-        yield json.dumps({"type": "log", "message": f"Container: {container}"}, ensure_ascii=False) + "\n"
-        yield json.dumps({"type": "log", "message": f"CLI path: {cli_path}"}, ensure_ascii=False) + "\n"
         yield json.dumps({"type": "debug", "payload": diagnostics}, ensure_ascii=False) + "\n"
 
-        for index, row in enumerate(rows, start=1):
-            if time.time() - started > IMPORT_TOTAL_TIMEOUT:
-                timeout_message = f"global import timeout after {IMPORT_TOTAL_TIMEOUT}s"
-                yield json.dumps({"type": "stderr", "message": timeout_message}, ensure_ascii=False) + "\n"
-                break
+        events: list[dict[str, Any]] = []
 
-            email = row.get("email", "")
-            yield json.dumps({"type": "log", "message": f"[{index}/{len(rows)}] Start: {email}"}, ensure_ascii=False) + "\n"
+        def emit(event: dict[str, Any]) -> None:
+            events.append(event)
 
-            try:
-                result = create_user(
-                    email,
-                    row.get("firstname", ""),
-                    row.get("lastname", ""),
-                    row.get("role", ""),
-                    container,
-                    cli_path,
-                )
-                yield json.dumps({"type": "command", "message": result["command"]}, ensure_ascii=False) + "\n"
+        payload = _process_rows(rows, container, cli_path, rollback_on_error=rollback_on_error, emit=emit)
 
-                if result.get("stdout"):
-                    yield json.dumps({"type": "stdout", "message": result["stdout"]}, ensure_ascii=False) + "\n"
-                if result.get("stderr"):
-                    yield json.dumps({"type": "stderr", "message": result["stderr"]}, ensure_ascii=False) + "\n"
+        for event in events:
+            yield json.dumps(event, ensure_ascii=False) + "\n"
 
-                if result["returncode"] == 0:
-                    success += 1
-
-                results.append(result)
-
-            except Exception as error:
-                message = str(error)
-                yield json.dumps({"type": "stderr", "message": message}, ensure_ascii=False) + "\n"
-                results.append({"email": email, "returncode": -1, "stderr": message, "stdout": "", "command": ""})
-
-        payload = {
-            "status": "import finished",
-            "total": len(results),
-            "success": success,
-            "results": results,
-            "diagnostics": diagnostics,
-        }
+        payload["diagnostics"] = diagnostics
         yield json.dumps({"type": "final", "payload": payload}, ensure_ascii=False) + "\n"
 
     return Response(generate(), mimetype="application/x-ndjson")
+
+
+@app.route("/pending-group-assignments", methods=["GET"])
+def pending_group_assignments() -> Any:
+    with PENDING_LOCK:
+        payload = list(PENDING_ASSIGNMENTS)
+    return jsonify({"total": len(payload), "items": payload})
+
+
+@app.route("/retry-pending-group-assignments", methods=["POST"])
+def retry_pending_group_assignments() -> Any:
+    diagnostics = diagnose_environment()
+    container = diagnostics.get("resolved_container", PASSBOLT_CONTAINER)
+    cli_path = diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH)
+    group_service = GroupService(container, cli_path)
+
+    retried: list[dict[str, Any]] = []
+    still_pending: list[dict[str, Any]] = []
+    with PENDING_LOCK:
+        current = list(PENDING_ASSIGNMENTS)
+        PENDING_ASSIGNMENTS.clear()
+
+    for item in current:
+        result = group_service.assign_user_to_group(item["email"], item["group"])
+        if result["returncode"] == 0:
+            retried.append({"email": item["email"], "group": item["group"], "status": "assigned"})
+        else:
+            item["reason"] = result.get("stderr") or item.get("reason", "retry failed")
+            still_pending.append(item)
+
+    with PENDING_LOCK:
+        PENDING_ASSIGNMENTS.extend(still_pending)
+
+    return jsonify({"retried": retried, "pending": still_pending, "pending_total": len(still_pending)})
 
 
 @app.errorhandler(Exception)

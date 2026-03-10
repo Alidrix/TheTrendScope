@@ -4,269 +4,87 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Passbolt CSV Import</title>
-  <style>
-    body { margin: 0; font-family: Arial, sans-serif; background: #0d1b2a; color: #fff; }
-    .wrap { max-width: 960px; margin: 24px auto; padding: 0 16px; }
-    .card { background: #1b263b; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-    button { background: #f4a261; border: 0; border-radius: 8px; color: #fff; padding: 10px 14px; cursor: pointer; }
-    .muted { color: #b9c5d4; }
-    .progress { width: 100%; height: 10px; border-radius: 10px; background: #31445e; overflow: hidden; margin-top: 10px; }
-    .bar { height: 100%; width: 0%; background: #2a9d8f; transition: width 0.2s; }
-    table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
-    th, td { text-align: left; border-bottom: 1px solid #415a77; padding: 8px; }
-    .ok { color: #70e000; }
-    .ko { color: #ff6b6b; }
-    .logs { margin-top: 10px; background: #0a1422; border: 1px solid #415a77; border-radius: 8px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; height: 220px; overflow-y: auto; white-space: pre-wrap; }
-    #toast { position: fixed; right: 16px; bottom: 16px; background: #1b263b; border: 1px solid #415a77; padding: 10px 12px; border-radius: 8px; display: none; }
-  </style>
+  <link rel="icon" type="image/png" href="/assets/favicon.png" />
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <div class="wrap">
-    <h2>Passbolt CSV Importer</h2>
-    <p class="muted">CSV attendu: <code>email,firstname,lastname,role</code></p>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-mini">
+        <img src="/assets/passbolt.png" alt="Passbolt" onerror="this.onerror=null;this.src='/assets/logo-mark.svg';" />
+        <span>Importer</span>
+      </div>
+      <nav class="menu">
+        <a class="menu-item active" href="#" data-view="importView">Import CSV</a>
+        <a class="menu-item" href="#" data-view="usersView">Utilisateurs</a>
+        <a class="menu-item" href="#" data-view="logsView">Logs</a>
+      </nav>
+    </aside>
 
-    <div class="card">
-      <input type="file" id="file" accept=".csv" />
-      <button id="uploadBtn">Importer</button>
-      <div class="progress"><div id="bar" class="bar"></div></div>
-      <p id="summary" class="muted"></p>
-      <h3>Commandes & logs</h3>
-      <div id="logs" class="logs"></div>
-    </div>
+    <main class="main-content">
+      <header class="navbar card">
+        <div class="brand-full">
+          <img src="/assets/passbolt.png" alt="Passbolt" onerror="this.onerror=null;this.src='/assets/logo-full.svg';" />
+          <h1>CSV Importer</h1>
+        </div>
+      </header>
 
-    <div class="card">
-      <h3>Résultats</h3>
-      <table>
-        <thead><tr><th>Email</th><th>Status</th><th>Détails</th></tr></thead>
-        <tbody id="results"></tbody>
-      </table>
-    </div>
+      <section id="importView" class="view-section active-view">
+        <section class="card">
+          <p class="muted">CSV supporté: <code>email,firstname,lastname,role</code> ou <code>email,firstname,lastname,role,groups</code> (groupes séparés par <code>;</code>).</p>
+          <div class="controls-row">
+            <input type="file" id="file" accept=".csv" />
+            <label class="check"><input type="checkbox" id="rollbackOnError" /> Rollback si erreur</label>
+            <button id="uploadBtn" class="btn-primary">Importer</button>
+          </div>
+
+          <div class="progress"><div id="bar" class="bar"></div></div>
+          <div class="progress-meta">
+            <span id="progressPercent">0%</span>
+            <span id="progressStage" class="stage">Prévalidation</span>
+          </div>
+          <p id="summary" class="muted"></p>
+        </section>
+
+        <section class="card grid-two">
+          <div>
+            <h3>Résultats import</h3>
+            <table>
+              <thead><tr><th>Email</th><th>Status</th><th>Groupes demandés</th><th>Détails</th></tr></thead>
+              <tbody id="results"></tbody>
+            </table>
+          </div>
+          <div>
+            <h3>Résumé final</h3>
+            <ul id="finalSummary" class="summary-list"></ul>
+          </div>
+        </section>
+      </section>
+
+      <section id="usersView" class="view-section">
+        <section class="card">
+          <h3>Utilisateurs (dernier import)</h3>
+          <table>
+            <thead>
+              <tr><th>Email</th><th>Rôle</th><th>Statut</th><th>Groupes</th></tr>
+            </thead>
+            <tbody id="usersRows"></tbody>
+          </table>
+          <p id="usersEmpty" class="muted">Aucun import exécuté pour le moment.</p>
+        </section>
+      </section>
+
+      <section id="logsView" class="view-section">
+        <section class="card">
+          <h3>Logs d'import</h3>
+          <div id="logs" class="logs"></div>
+        </section>
+      </section>
+    </main>
   </div>
 
-  <div id="toast"></div>
-
-  <script>
-    const fileInput = document.getElementById('file');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const resultsBody = document.getElementById('results');
-    const summary = document.getElementById('summary');
-    const bar = document.getElementById('bar');
-    const toast = document.getElementById('toast');
-    const logsBox = document.getElementById('logs');
-    const REQUEST_TIMEOUT_MS = 60000;
-
-    function showToast(message) {
-      toast.textContent = message;
-      toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 2500);
-    }
-
-    function appendLog(prefix, message) {
-      logsBox.textContent += `[${new Date().toLocaleTimeString()}] ${prefix} ${message}\n`;
-      logsBox.scrollTop = logsBox.scrollHeight;
-    }
-
-    function renderResults(payload) {
-      const rows = payload.results || [];
-      rows.forEach((row) => {
-        const ok = row.returncode === 0;
-        const detail = row.stderr || row.stdout || '-';
-        resultsBody.insertAdjacentHTML('beforeend', `<tr><td>${row.email || ''}</td><td class="${ok ? 'ok' : 'ko'}">${ok ? 'OK' : 'ERREUR'}</td><td>${detail}</td></tr>`);
-      });
-      summary.textContent = `Import terminé: ${payload.success || 0}/${payload.total || 0}`;
-      bar.style.width = '100%';
-      showToast('Import terminé');
-    }
-
-    async function parseJsonResponse(response) {
-      const contentType = response.headers.get('content-type') || '';
-      const body = await response.text();
-
-      if (!contentType.includes('application/json')) {
-        const clean = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        throw new Error(clean || `Réponse non JSON (HTTP ${response.status})`);
-      }
-
-      try {
-        return JSON.parse(body);
-      } catch (_) {
-        throw new Error(`JSON invalide reçu du serveur (HTTP ${response.status})`);
-      }
-    }
-
-    async function fetchFirstOk(urls, options) {
-      let lastResponse = null;
-      for (const url of urls) {
-        const response = await fetch(url, options);
-        if (response.status === 404) {
-          appendLog('DBG', `Endpoint ${url} indisponible (404)`);
-          lastResponse = response;
-          continue;
-        }
-        return { response, url };
-      }
-      return { response: lastResponse, url: urls[urls.length - 1] };
-    }
-
-    async function importFallback(form, signal) {
-      appendLog('INFO', 'Endpoint stream indisponible, fallback vers import HTTP classique');
-      const { response, url } = await fetchFirstOk(['/import', '/api/import'], { method: 'POST', body: form, signal });
-      if (!response) {
-        throw new Error('Aucun endpoint /import disponible');
-      }
-      appendLog('INFO', `Import fallback via ${url}`);
-      try {
-        const payload = await parseJsonResponse(response);
-        if (!response.ok) {
-          throw new Error(payload.error || payload.detail || `Erreur import (HTTP ${response.status})`);
-        }
-        renderResults(payload);
-      } catch (error) {
-        if (response.status >= 500) {
-          appendLog('ERR', `Le endpoint ${url} répond en 500 (API probablement ancienne ou en erreur).`);
-          appendLog('DBG', 'Action recommandée: docker compose down && docker compose up -d --build');
-        }
-        throw error;
-      }
-    }
-
-
-    async function pingApi() {
-      const { response, url } = await fetchFirstOk(['/health', '/api/health'], {});
-      if (!response) {
-        throw new Error('Aucun endpoint health disponible');
-      }
-      const payload = await parseJsonResponse(response);
-      if (!response.ok) {
-        throw new Error(payload.error || payload.detail || 'Healthcheck API en erreur');
-      }
-      appendLog('INFO', `Ping API OK via ${url} | container=${payload.container || 'n/a'} | cli=${payload.cli_path || 'n/a'}`);
-      return payload;
-    }
-
-    async function runAutoDebug() {
-      appendLog('INFO', 'Auto-debug déclenché');
-      try {
-        const { response, url } = await fetchFirstOk(['/debug/import', '/api/debug/import'], {});
-        if (!response) {
-          appendLog('DBG', 'Aucun endpoint debug disponible.');
-          return;
-        }
-        appendLog('DBG', `Auto-debug via ${url}`);
-        if (response.status === 404) {
-          appendLog('DBG', 'Endpoint /debug/import indisponible sur cette version API.');
-          const { response: healthResp } = await fetchFirstOk(['/health', '/api/health'], {});
-          if (!healthResp) {
-            appendLog('DBG', 'Aucun endpoint health disponible pendant auto-debug.');
-            return;
-          }
-          const healthPayload = await parseJsonResponse(healthResp);
-          appendLog('DBG', `Health status=${healthPayload.status} container=${healthPayload.container} cli=${healthPayload.cli_path}`);
-          appendLog('DBG', "Action recommandée: mettre à jour/rebuild l'API pour activer /debug/import et /import-stream.");
-          return;
-        }
-        const payload = await parseJsonResponse(response);
-        const checks = payload?.diagnostics?.checks || [];
-        checks.forEach((check) => {
-          appendLog('DBG', `${check.name}: ${check.ok ? 'OK' : 'KO'} ${check.selected || ''}`.trim());
-        });
-        const recommendations = payload?.diagnostics?.recommendations || [];
-        recommendations.forEach((item) => appendLog('DBG', `Reco: ${item}`));
-      } catch (error) {
-        appendLog('ERR', `Auto-debug impossible: ${error.message || String(error)}`);
-      }
-    }
-
-    uploadBtn.addEventListener('click', async () => {
-      const file = fileInput.files[0];
-      if (!file) {
-        showToast('Sélectionne un CSV');
-        return;
-      }
-
-      uploadBtn.disabled = true;
-      bar.style.width = '10%';
-      resultsBody.innerHTML = '';
-      logsBox.textContent = '';
-      summary.textContent = 'Import en cours...';
-      appendLog('INFO', `Fichier: ${file.name}`);
-
-      const form = new FormData();
-      form.append('file', file);
-
-      let timer = null;
-
-      try {
-        await pingApi();
-
-        const controller = new AbortController();
-        timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-        const { response, url } = await fetchFirstOk(['/import-stream', '/api/import-stream'], { method: 'POST', body: form, signal: controller.signal });
-        if (!response || response.status === 404) {
-          await importFallback(form, controller.signal);
-          return;
-        }
-        appendLog('INFO', `Import stream via ${url}`);
-        if (!response.ok || !response.body) {
-          const message = await response.text();
-          throw new Error(message || 'Réponse invalide');
-        }
-
-        bar.style.width = '30%';
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let finalPayload = null;
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) {
-            break;
-          }
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            if (!trimmed.startsWith('{')) {
-              throw new Error(`Flux non JSON reçu: ${trimmed.slice(0, 160)}`);
-            }
-            const entry = JSON.parse(trimmed);
-            if (entry.type === 'command') appendLog('CMD', entry.message);
-            if (entry.type === 'stdout') appendLog('OUT', entry.message);
-            if (entry.type === 'stderr') appendLog('ERR', entry.message);
-            if (entry.type === 'log') appendLog('INFO', entry.message);
-            if (entry.type === 'final') finalPayload = entry.payload;
-          }
-          bar.style.width = '75%';
-        }
-
-        if (finalPayload) {
-          clearTimeout(timer);
-          renderResults(finalPayload);
-        } else {
-          throw new Error('Aucun résultat final reçu');
-        }
-      } catch (error) {
-        if (error.name === 'AbortError') {
-          appendLog('ERR', `Timeout global atteint (${REQUEST_TIMEOUT_MS / 1000}s)`);
-          summary.textContent = 'Import timeout (debug automatique lancé)';
-          await runAutoDebug();
-        } else {
-          appendLog('ERR', error.message || String(error));
-          summary.textContent = 'Import interrompu (voir logs)';
-          await runAutoDebug();
-        }
-        showToast('Erreur import');
-        bar.style.width = '100%';
-      } finally {
-        if (timer) clearTimeout(timer);
-        uploadBtn.disabled = false;
-      }
-    });
-  </script>
+  <div id="toast" class="toast toast-info"></div>
+  <script src="/script.js"></script>
 </body>
 </html>
