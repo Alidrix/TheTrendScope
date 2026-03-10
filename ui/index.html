@@ -11,6 +11,7 @@
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand-mini">
+        <span>Importer</span>
       </div>
       <nav class="menu">
         <a class="menu-item active" href="#" data-view="importView">Import CSV</a>
@@ -23,17 +24,18 @@
       <header class="navbar card">
         <div class="brand-full">
           <img src="/assets/passbolt.png" alt="Passbolt" onerror="this.onerror=null;this.src='/assets/logo-full.svg';" />
+          <h1>CSV Importer</h1>
         </div>
       </header>
 
       <section id="importView" class="view-section active-view">
         <section class="card">
-          <p class="muted">CSV supporté: <code>email,firstnam,lastname,role</code> ou <code>email,firstname,lastname,role,groups</code> (GROUPES SÉPARÉS PAR <code>;</code>).</p>
+          <p class="muted">CSV supporté: <code>email,firstname,lastname,role</code> ou <code>email,firstname,lastname,role,groups</code> (groupes séparés par <code>;</code>).</p>
           <div class="controls-row">
             <input type="file" id="file" accept=".csv" />
             <label class="check"><input type="checkbox" id="rollbackOnError" /> Rollback si erreur</label>
             <button id="uploadBtn" class="btn-primary">Importer</button>
-            <button id="deleteLastBtn" class="btn-danger" type="button">Suppression des comptes du dernier import</button>
+            <button id="deleteLastBtn" class="btn-danger" type="button">Supprimer comptes du dernier import</button>
           </div>
 
           <div class="progress"><div id="bar" class="bar"></div></div>

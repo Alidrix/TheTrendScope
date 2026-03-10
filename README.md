@@ -38,6 +38,7 @@ user2@example.com,Marie,Durand,admin
 ## Fichier CSV d'exemple (5 utilisateurs)
 
 Un exemple prêt à l'emploi est disponible ici : `examples/users-5.csv`.
+Un jeu de charge (2000 utilisateurs avec groupes) est disponible ici : `examples/users-2000-groups.csv`.
 Vous pouvez l'uploader directement dans l'UI.
 
 ## Endpoint API
