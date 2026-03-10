@@ -58,8 +58,8 @@ IMPORTER_UI_PORT=19091
 Puis relancez :
 
 ```bash
-docker compose down
-docker compose up -d --build
+sudo docker compose down
+sudo docker compose up -d --build
 ```
 
 
@@ -68,13 +68,13 @@ docker compose up -d --build
 - Si vous voyez `404 Not Found` sur `/import-stream`, vos conteneurs tournent probablement avec une ancienne image/config. Relancez avec rebuild :
 
 ```bash
-docker compose down
-docker compose up -d --build
+sudo docker compose down
+sudo docker compose up -d --build
 ```
 
 - L'UI bascule automatiquement sur `/import` si `/import-stream` est indisponible, mais sans logs temps réel.
 
-- Si l'UI affiche `JSON.parse: unexpected character`, cela signifie que le proxy renvoie une page HTML (souvent 404) au lieu de JSON. Vérifiez `ui/nginx.conf` puis relancez `docker compose up -d --build`.
+- Si l'UI affiche `JSON.parse: unexpected character`, cela signifie que le proxy renvoie une page HTML (souvent 404) au lieu de JSON. Vérifiez `ui/nginx.conf` puis relancez `sudo docker compose up -d --build`.
 
 
 ### Comportement UI ajouté
@@ -87,7 +87,7 @@ docker compose up -d --build
 - Si vous voyez `fallback vers /import` puis `500 Internal Server Error`, cela indique généralement une API ancienne/en échec. Relancez en rebuild et vérifiez les logs API :
 
 ```bash
-docker compose down
-docker compose up -d --build
-docker logs -n 200 passbolt-import-api
+sudo docker compose down
+sudo docker compose up -d --build
+sudo docker logs -n 200 passbolt-import-api
 ```
