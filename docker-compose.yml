@@ -9,7 +9,6 @@ services:
     environment:
       - PASSBOLT_CONTAINER=${PASSBOLT_CONTAINER:-passbolt-passbolt-1}
       - PASSBOLT_CLI_PATH=${PASSBOLT_CLI_PATH:-/usr/share/php/passbolt/bin/cake}
-      - DOCKER_BIN=${DOCKER_BIN:-docker}
       - IMPORT_COMMAND_TIMEOUT=${IMPORT_COMMAND_TIMEOUT:-60}
       - IMPORT_TOTAL_TIMEOUT=${IMPORT_TOTAL_TIMEOUT:-60}
     restart: unless-stopped
