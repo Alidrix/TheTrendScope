@@ -25,6 +25,7 @@ sudo docker compose up -d
 - `PASSBOLT_CLI_PATH` (défaut: `/usr/share/php/passbolt/bin/cake`) : chemin vers la commande `cake` dans le conteneur Passbolt.
 - `IMPORT_COMMAND_TIMEOUT` (défaut: `60`) : timeout (en secondes) d'une commande CLI d'import pour éviter un blocage infini.
 - `IMPORT_TOTAL_TIMEOUT` (défaut: `60`) : timeout global d'un import (au-delà, debug automatique).
+- `PASSBOLT_DELETE_USER_COMMAND` (défaut: `passbolt delete_user -u {email}`) : commande CLI pour supprimer les comptes du dernier import.
 
 ## Format CSV attendu
 
@@ -45,6 +46,7 @@ Vous pouvez l'uploader directement dans l'UI.
 - `POST /import-stream` : même import mais en flux NDJSON pour afficher les commandes/logs en temps réel dans l'UI.
 - `GET /health` : vérification rapide du service + auto-détection container/CLI.
 - `GET /debug/import` : diagnostic détaillé (checks + recommandations).
+- `POST /delete-last-import-users` : supprime uniquement les comptes créés lors du dernier import CSV exécuté.
 
 ### Personnaliser les ports (éviter les conflits)
 
@@ -92,15 +94,11 @@ sudo docker compose up -d --build
 sudo docker logs -n 200 passbolt-import-api
 ```
 
-## Logos UI (favicon + logo principal)
+## Logos UI (sans fichiers binaires dans le repo)
 
-Pour utiliser **vos 2 logos personnalisés** sans bloquer la création de PR :
+Pour éviter l'erreur de PR `Les fichiers binaires ne sont pas pris en charge`,
+les logos versionnés dans ce dépôt restent en **SVG** (`ui/assets/*.svg`).
 
-- Placez vos fichiers dans `ui/assets/` :
-  - `favicon.png` (icone navigateur)
-  - `passbolt.png` (logo UI)
-- L'UI est configurée avec fallback automatique :
-  - si les PNG existent, ils sont utilisés,
-  - sinon l'UI repasse automatiquement sur les SVG (`favicon.svg`, `logo-mark.svg`, `logo-full.svg`).
+Si vous voulez tester localement un `favicon.png` ou un `passbolt.png`,
+ajoutez-les uniquement en local (sans commit Git) ou via votre pipeline de déploiement.
 
-Cela permet de garder une UI brandée en local/prod, tout en restant compatible avec des outils CI/PR qui n'acceptent pas les diffs binaires.

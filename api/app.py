@@ -22,6 +22,7 @@ GROUP_LIST_COMMAND = os.getenv("PASSBOLT_GROUP_LIST_COMMAND", "passbolt list_gro
 GROUP_CREATE_COMMAND = os.getenv("PASSBOLT_GROUP_CREATE_COMMAND", "passbolt create_group -n {group}")
 GROUP_ASSIGN_COMMAND = os.getenv("PASSBOLT_GROUP_ASSIGN_COMMAND", "passbolt add_user_to_group -u {email} -g {group}")
 ROLLBACK_COMMAND = os.getenv("PASSBOLT_ROLLBACK_COMMAND", "")
+DELETE_USER_COMMAND = os.getenv("PASSBOLT_DELETE_USER_COMMAND", "passbolt delete_user -u {email}")
 
 docker_client = docker.from_env()
 
@@ -30,6 +31,8 @@ SAFE_GROUP = re.compile(r"^[A-Za-z0-9 _@.\-']+$")
 SAFE_ROLE = {"user", "admin"}
 PENDING_ASSIGNMENTS: list[dict[str, Any]] = []
 PENDING_LOCK = Lock()
+LAST_IMPORTED_USERS: list[str] = []
+LAST_IMPORTED_USERS_LOCK = Lock()
 
 
 def _sanitize_value(name: str, value: str) -> str:
@@ -379,6 +382,20 @@ def _append_pending(entry: dict[str, Any]) -> None:
         PENDING_ASSIGNMENTS.append(entry)
 
 
+
+
+def _emit_structured(emit: Any, level: str, code: str, message: str, **extra: Any) -> None:
+    if not emit:
+        return
+    payload = {"level": level, "code": code, "message": message, **extra}
+    emit({"type": "audit", "payload": payload})
+
+
+def _set_last_imported_users(users: list[str]) -> None:
+    with LAST_IMPORTED_USERS_LOCK:
+        LAST_IMPORTED_USERS.clear()
+        LAST_IMPORTED_USERS.extend(users)
+
 def rollback_batch(created_users: list[str], container: str, cli_path: str) -> dict[str, Any]:
     if not created_users:
         return {"status": "no-op", "rolled_back": [], "manual_required": False}
@@ -425,11 +442,13 @@ def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rol
     groups_assigned_total = 0
     groups_deferred_total = 0
 
+    _emit_structured(emit, "info", "import.start", "Import batch started", total_rows=len(rows), rollback_on_error=rollback_on_error)
     list_result = group_service.list_groups()
     if list_result["result"]["returncode"] == 0:
         known_groups = {g.lower(): g for g in list_result["groups"]}
     elif emit:
         emit({"type": "stderr", "message": "Impossible de lister les groupes, création best effort"})
+        _emit_structured(emit, "warning", "groups.list.failed", "Failed to list groups, using best effort")
 
     if emit:
         emit({"type": "progress", "payload": {"current": 0, "total": max(total_valid, 1), "percent": 0, "stage": "preview"}})
@@ -466,6 +485,7 @@ def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rol
             emit({"type": "progress", "payload": {"current": index, "total": len(rows), "percent": int((index / max(len(rows), 1)) * 100), "stage": "create-user"}})
 
         email = row["email"]
+        _emit_structured(emit, "info", "user.create.start", "Creating user", row=index, email=email)
         user_result = create_user(email, row["firstname"], row["lastname"], row["role"], container, cli_path)
 
         user_payload: dict[str, Any] = {
@@ -482,8 +502,10 @@ def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rol
 
         if user_result["returncode"] == 0:
             created_users.append(email)
+            _emit_structured(emit, "info", "user.create.success", "User created", row=index, email=email)
         else:
             user_payload["errors"].append(user_result.get("stderr") or "user creation failed")
+            _emit_structured(emit, "error", "user.create.failed", "User creation failed", row=index, email=email, stderr=user_result.get("stderr", ""))
             if _critical_error(user_result):
                 critical_error = True
 
@@ -498,9 +520,11 @@ def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rol
                         groups_created_total += 1
                         user_payload["groups_created"].append(group)
                         created_groups_in_batch.add(group)
+                        _emit_structured(emit, "info", "group.create.success", "Group created", row=index, group=group, email=email)
                     known_groups[normalized] = group
                 else:
                     user_payload["errors"].append(f"group {group}: {create_result.get('stderr', 'creation failed')}")
+                    _emit_structured(emit, "error", "group.create.failed", "Group creation failed", row=index, group=group, email=email, stderr=create_result.get("stderr", ""))
                     if _critical_error(create_result):
                         critical_error = True
                     continue
@@ -518,8 +542,10 @@ def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rol
             if assign_result["returncode"] == 0:
                 user_payload["groups_assigned"].append(group)
                 groups_assigned_total += 1
+                _emit_structured(emit, "info", "group.assign.success", "Group assigned", row=index, group=group, email=email)
             else:
                 reason = assign_result.get("stderr") or "user not active yet"
+                _emit_structured(emit, "warning", "group.assign.deferred", "Group assignment deferred", row=index, group=group, email=email, reason=reason)
                 user_payload["groups_deferred"].append(group)
                 groups_deferred_total += 1
                 _append_pending({"email": email, "group": group, "reason": reason, "status": "deferred"})
@@ -541,6 +567,8 @@ def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rol
     final_status = "success"
     errors_count = sum(1 for item in results if item.get("user_create_status") != "success")
 
+    _set_last_imported_users(created_users)
+
     if critical_error and rollback_on_error:
         rollback = rollback_batch(created_users, container, cli_path)
         if rollback.get("manual_required"):
@@ -552,6 +580,8 @@ def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rol
 
     if emit:
         emit({"type": "progress", "payload": {"current": len(results), "total": max(len(rows), 1), "percent": 100, "stage": "done"}})
+
+    _emit_structured(emit, "info", "import.done", "Import batch finished", status=final_status, users_created=len(created_users), errors=errors_count)
 
     return {
         "status": final_status,
@@ -689,6 +719,37 @@ def retry_pending_group_assignments() -> Any:
         PENDING_ASSIGNMENTS.extend(still_pending)
 
     return jsonify({"retried": retried, "pending": still_pending, "pending_total": len(still_pending)})
+
+
+@app.route("/delete-last-import-users", methods=["POST"])
+def delete_last_import_users() -> Any:
+    diagnostics = diagnose_environment()
+    container = diagnostics.get("resolved_container", PASSBOLT_CONTAINER)
+    cli_path = diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH)
+
+    with LAST_IMPORTED_USERS_LOCK:
+        target_users = list(LAST_IMPORTED_USERS)
+
+    if not target_users:
+        return jsonify({"status": "no-op", "message": "no users from latest import", "deleted": [], "errors": []})
+
+    deleted: list[str] = []
+    errors: list[dict[str, str]] = []
+
+    for email in target_users:
+        shell_command = f"{shlex.quote(cli_path)} {DELETE_USER_COMMAND.format(email=shlex.quote(email))}"
+        result = _run_shell_command(container, cli_path, shell_command)
+        if result.get("returncode") == 0:
+            deleted.append(email)
+        else:
+            errors.append({"email": email, "error": result.get("stderr", "delete failed")})
+
+    if deleted:
+        with LAST_IMPORTED_USERS_LOCK:
+            LAST_IMPORTED_USERS[:] = [email for email in LAST_IMPORTED_USERS if email not in deleted]
+
+    status = "success" if not errors else "partial"
+    return jsonify({"status": status, "deleted": deleted, "errors": errors, "total_requested": len(target_users)})
 
 
 @app.errorhandler(Exception)

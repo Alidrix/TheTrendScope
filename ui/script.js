@@ -1,5 +1,6 @@
 const fileInput = document.getElementById('file');
 const uploadBtn = document.getElementById('uploadBtn');
+const deleteLastBtn = document.getElementById('deleteLastBtn');
 const rollbackInput = document.getElementById('rollbackOnError');
 const resultsBody = document.getElementById('results');
 const usersRows = document.getElementById('usersRows');
@@ -24,16 +25,12 @@ function showToast(message, type = 'info') {
   setToastType(type);
   toast.textContent = message;
   toast.style.display = 'block';
-  setTimeout(() => { toast.style.display = 'none'; }, 2500);
+  setTimeout(() => { toast.style.display = 'none'; }, 3000);
 }
 
 function switchView(viewId) {
-  viewSections.forEach((section) => {
-    section.classList.toggle('active-view', section.id === viewId);
-  });
-  menuItems.forEach((item) => {
-    item.classList.toggle('active', item.dataset.view === viewId);
-  });
+  viewSections.forEach((section) => section.classList.toggle('active-view', section.id === viewId));
+  menuItems.forEach((item) => item.classList.toggle('active', item.dataset.view === viewId));
 }
 
 menuItems.forEach((item) => {
@@ -43,31 +40,40 @@ menuItems.forEach((item) => {
   });
 });
 
-function appendLog(prefix, message) {
-  logsBox.textContent += `[${new Date().toLocaleTimeString()}] ${prefix} ${message}\n`;
+function appendLog(kind, message, meta = null) {
+  const time = new Date().toLocaleTimeString();
+  const metaText = meta ? ` | ${JSON.stringify(meta)}` : '';
+  logsBox.textContent += `[${time}] [${kind}] ${message}${metaText}\n`;
   logsBox.scrollTop = logsBox.scrollHeight;
 }
 
+function appendAudit(payload) {
+  const level = (payload?.level || 'info').toUpperCase();
+  appendLog(`AUDIT-${level}`, payload?.message || payload?.code || 'event', {
+    code: payload?.code,
+    row: payload?.row,
+    email: payload?.email,
+    group: payload?.group,
+    reason: payload?.reason,
+    status: payload?.status
+  });
+}
+
 function stageLabel(stage) {
-  const map = {
+  return {
     'preview': 'Prévalidation',
     'create-user': 'Création utilisateur',
     'create-group': 'Création groupe',
     'assign-group': 'Assignation groupe',
     'done': 'Terminé'
-  };
-  return map[stage] || stage;
+  }[stage] || stage;
 }
 
 function setProgress(percent, stage = 'preview') {
   bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
   progressPercent.textContent = `${Math.round(percent)}%`;
   progressStage.textContent = stageLabel(stage);
-  if (stage === 'done') {
-    bar.classList.add('done');
-  } else {
-    bar.classList.remove('done');
-  }
+  bar.classList.toggle('done', stage === 'done');
 }
 
 function statusBadge(status) {
@@ -88,13 +94,9 @@ function renderUsersPanel() {
     usersEmpty.style.display = 'block';
     return;
   }
-
   usersEmpty.style.display = 'none';
   latestResults.forEach((row) => {
-    const groups = (row.groups_assigned && row.groups_assigned.length)
-      ? row.groups_assigned
-      : (row.groups_requested || []);
-
+    const groups = row.groups_assigned?.length ? row.groups_assigned : (row.groups_requested || []);
     usersRows.insertAdjacentHTML('beforeend', `
       <tr>
         <td>${escapeHtml(row.email)}</td>
@@ -108,12 +110,11 @@ function renderUsersPanel() {
 
 function renderImportResults(payload) {
   resultsBody.innerHTML = '';
-  const rows = payload.results || [];
-  latestResults = rows;
+  latestResults = payload.results || [];
 
-  rows.forEach((row) => {
+  latestResults.forEach((row) => {
     const detail = [
-      row.errors && row.errors.length ? `Erreurs: ${row.errors.join(' | ')}` : '',
+      row.errors?.length ? `Erreurs: ${row.errors.join(' | ')}` : '',
       row.groups_created?.length ? `Groupes créés: ${row.groups_created.join(', ')}` : '',
       row.groups_assigned?.length ? `Groupes assignés: ${row.groups_assigned.join(', ')}` : '',
       row.groups_deferred?.length ? `Groupes différés: ${row.groups_deferred.join(', ')}` : ''
@@ -141,6 +142,30 @@ function renderImportResults(payload) {
   renderUsersPanel();
   summary.textContent = `Import ${payload.status} — ${payload.success}/${payload.total}`;
 }
+
+async function deleteLastImportedUsers() {
+  deleteLastBtn.disabled = true;
+  try {
+    const response = await fetch('/delete-last-import-users', { method: 'POST' });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Suppression impossible');
+
+    const deletedCount = (payload.deleted || []).length;
+    appendLog('INFO', 'Suppression des comptes du dernier import terminée', payload);
+    if (deletedCount > 0) {
+      latestResults = latestResults.filter((row) => !(payload.deleted || []).includes(row.email));
+      renderUsersPanel();
+    }
+    showToast(`Suppression terminée (${deletedCount} compte(s))`, deletedCount > 0 ? 'success' : 'warning');
+  } catch (error) {
+    appendLog('ERR', error.message || String(error));
+    showToast('Erreur suppression comptes', 'error');
+  } finally {
+    deleteLastBtn.disabled = false;
+  }
+}
+
+deleteLastBtn?.addEventListener('click', deleteLastImportedUsers);
 
 uploadBtn.addEventListener('click', async () => {
   const file = fileInput.files[0];
@@ -179,13 +204,16 @@ uploadBtn.addEventListener('click', async () => {
         if (event.type === 'log') appendLog('INFO', event.message);
         if (event.type === 'stderr') appendLog('ERR', event.message);
         if (event.type === 'stdout') appendLog('OUT', event.message);
+        if (event.type === 'audit') appendAudit(event.payload || {});
         if (event.type === 'progress') {
           const payload = event.payload || {};
           setProgress(payload.percent || 0, payload.stage || 'preview');
+          appendLog('PROGRESS', `${payload.percent || 0}% - ${stageLabel(payload.stage || 'preview')}`, payload);
         }
         if (event.type === 'final') {
           setProgress(100, 'done');
           renderImportResults(event.payload);
+          appendLog('INFO', 'Import stream terminé', { status: event.payload?.status, success: event.payload?.success, total: event.payload?.total });
           showToast('Import terminé', 'success');
         }
       }

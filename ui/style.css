@@ -53,6 +53,9 @@ button { border: 1px solid transparent; border-radius: 8px; padding: 10px 14px; 
 .btn-primary { background: var(--accent); color: var(--text-on-accent); }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-primary:active { background: var(--accent-active); }
+.btn-danger { background: var(--danger); color: var(--text-on-accent); }
+.btn-danger:hover { filter: brightness(0.92); }
+.btn-danger:active { filter: brightness(0.85); }
 button:focus, .menu-item:focus, input:focus { outline: none; box-shadow: var(--focus-ring); }
 button:disabled { opacity: 0.6; cursor: not-allowed; }
 
