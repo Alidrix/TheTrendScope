@@ -132,7 +132,7 @@
           const healthResp = await fetch('/health');
           const healthPayload = await parseJsonResponse(healthResp);
           appendLog('DBG', `Health status=${healthPayload.status} container=${healthPayload.container} cli=${healthPayload.cli_path}`);
-          appendLog('DBG', 'Action recommandée: mettre à jour/rebuild l'API pour activer /debug/import et /import-stream.');
+          appendLog('DBG', "Action recommandée: mettre à jour/rebuild l'API pour activer /debug/import et /import-stream.");
           return;
         }
         const payload = await parseJsonResponse(response);
