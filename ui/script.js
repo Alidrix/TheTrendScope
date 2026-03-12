@@ -269,6 +269,17 @@ async function apiGet(path) {
   return payload;
 }
 
+async function parseErrorResponse(response, fallbackMessage) {
+  const raw = await response.text();
+  try {
+    const payload = raw ? JSON.parse(raw) : {};
+    return payload?.error || payload?.message || fallbackMessage;
+  } catch (error) {
+    const snippet = raw.slice(0, 160).replace(/\n/g, ' ');
+    return `${fallbackMessage} (HTTP ${response.status})${snippet ? `: ${snippet}` : ''}`;
+  }
+}
+
 function renderDbSummary(summaryPayload) {
   const last = summaryPayload?.last_batch;
   dbSummary.innerHTML = `
@@ -411,11 +422,16 @@ logsExportBtn?.addEventListener('click', () => {
 logsDeleteAllBtn?.addEventListener('click', async () => {
   if (!window.confirm('Confirmer la suppression de tous les logs ?')) return;
   try {
-    await fetch('/logs', { method: 'DELETE' });
+    const response = await fetch('/logs', { method: 'DELETE' });
+    if (!response.ok) {
+      const errorMessage = await parseErrorResponse(response, 'Suppression des logs impossible');
+      throw new Error(errorMessage);
+    }
     appendLog('INFO', 'Tous les logs ont été supprimés');
     showToast('Logs supprimés', 'success');
     await refreshLogsView();
   } catch (error) {
+    appendLog('ERR', error.message || String(error));
     showToast('Erreur suppression logs', 'error');
   }
 });
@@ -428,11 +444,16 @@ logsDeleteBatchBtn?.addEventListener('click', async () => {
   }
   if (!window.confirm(`Confirmer la suppression des logs du batch ${batch} ?`)) return;
   try {
-    await fetch(`/logs?batch_uuid=${encodeURIComponent(batch)}`, { method: 'DELETE' });
+    const response = await fetch(`/logs?batch_uuid=${encodeURIComponent(batch)}`, { method: 'DELETE' });
+    if (!response.ok) {
+      const errorMessage = await parseErrorResponse(response, 'Suppression des logs du batch impossible');
+      throw new Error(errorMessage);
+    }
     appendLog('INFO', 'Logs batch supprimés', { batch_uuid: batch });
     showToast('Logs batch supprimés', 'success');
     await refreshLogsView();
   } catch (error) {
+    appendLog('ERR', error.message || String(error));
     showToast('Erreur suppression logs batch', 'error');
   }
 });
@@ -501,7 +522,11 @@ async function runDelete(previewOnly = false) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    if (!response.ok || !response.body) throw new Error('Delete stream indisponible');
+    if (!response.ok) {
+      const errorMessage = await parseErrorResponse(response, 'Delete stream indisponible');
+      throw new Error(errorMessage);
+    }
+    if (!response.body) throw new Error('Delete stream indisponible (body vide)');
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
