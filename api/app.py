@@ -382,7 +382,7 @@ class PassboltGroupService:
                 method,
                 f"{self.base_url}{path}",
                 json=payload,
-                timeout=PASSBOLT_API_TIMEOUT,
+                timeout=self.auth.timeout,
                 verify=self.auth.verify_setting,
                 headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self.session.headers)},
             )
@@ -564,25 +564,43 @@ def generate_totp_code(secret: str) -> str:
     return pyotp.TOTP(cleaned).now()
 
 
-def _passbolt_tls_verify_config() -> bool | str:
+def get_requests_verify_value() -> bool | str:
+    if PASSBOLT_API_CA_BUNDLE and os.path.exists(PASSBOLT_API_CA_BUNDLE):
+        return PASSBOLT_API_CA_BUNDLE
     if not PASSBOLT_API_VERIFY_TLS:
         return False
-    if PASSBOLT_API_CA_BUNDLE:
-        if not os.path.exists(PASSBOLT_API_CA_BUNDLE):
-            raise RuntimeError(f"PASSBOLT_API_CA_BUNDLE file not found: {PASSBOLT_API_CA_BUNDLE}")
-        return PASSBOLT_API_CA_BUNDLE
     return True
+
+
+def get_tls_diagnostics() -> dict[str, Any]:
+    ca_bundle_configured = bool(PASSBOLT_API_CA_BUNDLE)
+    ca_bundle_exists = bool(PASSBOLT_API_CA_BUNDLE and os.path.exists(PASSBOLT_API_CA_BUNDLE))
+    verify_value = get_requests_verify_value()
+    verify_mode: str | bool
+    if isinstance(verify_value, str):
+        verify_mode = verify_value
+    elif verify_value is False:
+        verify_mode = "TLS verification disabled (debug mode)"
+    else:
+        verify_mode = "system"
+    return {
+        "ca_bundle_configured": ca_bundle_configured,
+        "ca_bundle_exists": ca_bundle_exists,
+        "verify_mode": verify_mode,
+        "verify_value": verify_value,
+    }
 
 
 def _classify_request_error(error: Exception) -> str:
     raw = str(error)
     lowered = raw.lower()
+    tls = get_tls_diagnostics()
     if "certificate verify failed" in lowered or "unable to get local issuer certificate" in lowered:
-        if PASSBOLT_API_VERIFY_TLS and PASSBOLT_API_CA_BUNDLE:
-            return f"TLS certificate validation failed (CA bundle: {PASSBOLT_API_CA_BUNDLE}): {raw}"
-        if PASSBOLT_API_VERIFY_TLS:
+        if isinstance(tls["verify_value"], str):
+            return f"TLS certificate validation failed (CA bundle: {tls['verify_value']}): {raw}"
+        if tls["verify_value"] is True:
             return "TLS certificate validation failed. Configure PASSBOLT_API_CA_BUNDLE with the issuer CA chain or use a publicly trusted certificate."
-        return f"TLS certificate validation failed: {raw}"
+        return f"TLS certificate validation failed while verification is disabled (debug mode): {raw}"
     return raw
 
 
@@ -595,7 +613,7 @@ class PassboltApiAuthService:
         self.passphrase = PASSBOLT_API_PASSPHRASE
         self.verify_tls = PASSBOLT_API_VERIFY_TLS
         self.ca_bundle = PASSBOLT_API_CA_BUNDLE
-        self.verify_setting = _passbolt_tls_verify_config()
+        self.verify_setting = get_requests_verify_value()
         self.mfa_provider = PASSBOLT_API_MFA_PROVIDER
         self.totp_secret = PASSBOLT_API_TOTP_SECRET
         self.timeout = PASSBOLT_API_TIMEOUT
@@ -605,6 +623,7 @@ class PassboltApiAuthService:
         self._tokens: dict[str, Any] = {}
 
     def config_status(self) -> dict[str, Any]:
+        tls = get_tls_diagnostics()
         checks = {
             "base_url": bool(self.base_url),
             "auth_mode": self.auth_mode == "jwt",
@@ -612,26 +631,44 @@ class PassboltApiAuthService:
             "private_key_path": bool(self.private_key_path),
             "private_key_exists": bool(self.private_key_path and os.path.exists(self.private_key_path)),
             "passphrase": bool(self.passphrase),
-            "verify_tls": isinstance(self.verify_setting, (bool, str)),
-            "ca_bundle": (not self.verify_tls) or (not self.ca_bundle) or os.path.exists(self.ca_bundle),
             "mfa_provider": self.mfa_provider == "totp",
             "totp_secret": bool(self.totp_secret),
+            "ca_bundle_configured": tls["ca_bundle_configured"],
+            "ca_bundle_exists": tls["ca_bundle_exists"],
         }
-        configured = all(checks.values())
+        base_config_ok = all(checks[name] for name in (
+            "base_url",
+            "auth_mode",
+            "user_id",
+            "private_key_path",
+            "private_key_exists",
+            "passphrase",
+            "mfa_provider",
+            "totp_secret",
+        ))
+        tls_ok = checks["ca_bundle_exists"] or (not checks["ca_bundle_configured"] and self.verify_setting is not False) or (self.verify_setting is False)
+        configured = base_config_ok and tls_ok
         missing = [name for name, ok in checks.items() if not ok]
         message = "Passbolt delete API is fully configured" if configured else (
             "Configuration incomplète: " + ", ".join(missing)
         )
+        if self.verify_setting is False:
+            message = f"{message}. TLS verification disabled (debug mode)"
+        elif checks["ca_bundle_configured"] and not checks["ca_bundle_exists"]:
+            message = f"{message}. CA bundle file not found: {self.ca_bundle}"
+
         return {
             "configured": configured,
             "checks": checks,
+            "tls": {
+                "verify_mode": tls["verify_mode"],
+            },
             "message": message,
             "auth_mode_value": self.auth_mode,
             "private_key_path_value": self.private_key_path,
             "mfa_provider_value": self.mfa_provider,
             "verify_tls_value": self.verify_tls,
             "ca_bundle_path_value": self.ca_bundle,
-            "verify_mode": self.verify_setting if isinstance(self.verify_setting, str) else ("system" if self.verify_setting else "disabled"),
             "timeout": self.timeout,
         }
 
@@ -803,7 +840,7 @@ class PassboltDeleteService:
             response = self.session.request(
                 method,
                 f"{self.base_url}{path}",
-                timeout=PASSBOLT_API_TIMEOUT,
+                timeout=self.auth.timeout,
                 verify=self.auth.verify_setting,
                 headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self.session.headers)},
             )
@@ -924,6 +961,20 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
     auth_service = PassboltApiAuthService()
     service = PassboltDeleteService(auth_service)
     results: list[dict[str, Any]] = []
+
+    tls = get_tls_diagnostics()
+    _save_live_log(
+        "delete",
+        "warning" if service.auth.verify_setting is False else "info",
+        "Delete API TLS mode initialized",
+        batch_uuid=batch_uuid,
+        event_code="delete.tls.mode",
+        payload={
+            "verify_mode": tls["verify_mode"],
+            "ca_bundle_configured": tls["ca_bundle_configured"],
+            "ca_bundle_exists": tls["ca_bundle_exists"],
+        },
+    )
 
     if emit:
         emit({"type": "log", "message": f"Delete batch {batch_uuid} started ({total} user(s))"})
@@ -1079,10 +1130,21 @@ def _process_rows(
     emit: Any = None,
 ) -> dict[str, Any]:
     started = time.time()
+    batch_uuid = str(uuid.uuid4())
     auth_service = PassboltApiAuthService()
     group_service = PassboltGroupService(auth_service)
+    group_tls = get_tls_diagnostics()
+    _emit_structured(
+        emit,
+        "warning" if auth_service.verify_setting is False else "info",
+        "groups.tls.mode",
+        "Groups and delete APIs share the same TLS verify mode",
+        batch_uuid=batch_uuid,
+        verify_mode=group_tls["verify_mode"],
+        ca_bundle_configured=group_tls["ca_bundle_configured"],
+        ca_bundle_exists=group_tls["ca_bundle_exists"],
+    )
     preview = preview_rows(rows)
-    batch_uuid = str(uuid.uuid4())
     create_import_batch(batch_uuid=batch_uuid, filename=source_filename, total_rows=len(rows), status="running")
     _save_live_log("import", "info", "Import batch record created", batch_uuid=batch_uuid, event_code="import.batch.created", payload={"filename": source_filename, "total_rows": len(rows)})
 
@@ -1442,6 +1504,18 @@ def pending_group_assignments() -> Any:
 def retry_pending_group_assignments() -> Any:
     auth_service = PassboltApiAuthService()
     group_service = PassboltGroupService(auth_service)
+    group_tls = get_tls_diagnostics()
+    _save_live_log(
+        "groups",
+        "warning" if auth_service.verify_setting is False else "info",
+        "Groups and delete APIs share the same TLS verify mode",
+        event_code="groups.tls.mode",
+        payload={
+            "verify_mode": group_tls["verify_mode"],
+            "ca_bundle_configured": group_tls["ca_bundle_configured"],
+            "ca_bundle_exists": group_tls["ca_bundle_exists"],
+        },
+    )
     try:
         group_service.authenticate()
     except Exception as error:

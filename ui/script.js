@@ -476,15 +476,18 @@ async function refreshDeleteConfigStatus() {
       `private_key_exists=${checks.private_key_exists ? 'ok' : 'ko'}`,
       `passphrase=${checks.passphrase ? 'ok' : 'ko'}`,
       `mfa_provider=${checks.mfa_provider ? 'ok' : 'ko'}`,
-      `totp_secret=${checks.totp_secret ? 'ok' : 'ko'}`
+      `totp_secret=${checks.totp_secret ? 'ok' : 'ko'}`,
+      `ca_bundle_configured=${checks.ca_bundle_configured ? 'ok' : 'ko'}`,
+      `ca_bundle_exists=${checks.ca_bundle_exists ? 'ok' : 'ko'}`
     ].join(', ');
+    const verifyMode = payload?.tls?.verify_mode || 'unknown';
 
     if (payload?.configured) {
-      deleteConfigStatus.textContent = `API delete configurée. ${payload?.message || ''}`.trim();
+      deleteConfigStatus.textContent = `API delete configurée. ${payload?.message || ''} (TLS=${verifyMode})`.trim();
       return true;
     }
 
-    deleteConfigStatus.textContent = `API delete NON configurée. ${payload?.message || ''} (${checksInline})`;
+    deleteConfigStatus.textContent = `API delete NON configurée. ${payload?.message || ''} (TLS=${verifyMode}; ${checksInline})`;
     return false;
   } catch (error) {
     deleteConfigStatus.textContent = `Impossible de vérifier la config delete API: ${error.message || String(error)}`;
