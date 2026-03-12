@@ -32,7 +32,8 @@ sudo docker compose up -d
 - `PASSBOLT_API_USER_ID` : UUID du compte admin technique utilisé pour l'API delete.
 - `PASSBOLT_API_PRIVATE_KEY_PATH` : chemin de la clé privée GPG du compte API.
 - `PASSBOLT_API_PASSPHRASE` : passphrase de la clé privée GPG API.
-- `PASSBOLT_API_VERIFY_TLS` (défaut: `true`) : validation TLS pour l'API delete.
+- `PASSBOLT_API_VERIFY_TLS` (défaut: `true`) : validation TLS pour l'API delete/groupes (laisser `true` en production).
+- `PASSBOLT_API_CA_BUNDLE` (optionnel) : chemin PEM de la CA à utiliser (ex: `/app/certs/passbolt-ca.pem`) si le certificat Passbolt n'est pas publiquement approuvé.
 - `PASSBOLT_API_MFA_PROVIDER` (défaut: `totp`) : provider MFA.
 - `PASSBOLT_API_TOTP_SECRET` : secret TOTP pour la vérification MFA automatique.
 - `PASSBOLT_API_TIMEOUT` (optionnel, défaut `30`) : timeout API en secondes.
@@ -117,6 +118,24 @@ les logos versionnés dans ce dépôt restent en **SVG** (`ui/assets/*.svg`).
 Si vous voulez tester localement un `favicon.png` ou un `passbolt.png`,
 ajoutez-les uniquement en local (sans commit Git) ou via votre pipeline de déploiement.
 
+
+
+## Reverse-proxy UI/API
+
+L'UI appelle désormais systématiquement l'API backend via le préfixe `/api/*` (ex: `/api/delete-config-status`, `/api/import-stream`).
+Le proxy Nginx UI redirige `/api/*` vers `importer-api:9090`, ce qui évite les réponses HTML 404 Nginx pour des endpoints backend JSON.
+
+## TLS Passbolt (API groupes + delete)
+
+- Mode recommandé: exposer Passbolt avec un certificat publiquement approuvé.
+- Si votre PKI est interne: montez votre CA dans `./certs` puis définissez:
+
+```env
+PASSBOLT_API_VERIFY_TLS=true
+PASSBOLT_API_CA_BUNDLE=/app/certs/passbolt-ca.pem
+```
+
+- `PASSBOLT_API_VERIFY_TLS=false` reste un mode debug/fallback temporaire uniquement.
 
 ## Rebuild complet
 

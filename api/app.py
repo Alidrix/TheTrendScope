@@ -54,6 +54,7 @@ PASSBOLT_API_USER_ID = os.getenv("PASSBOLT_API_USER_ID", "").strip()
 PASSBOLT_API_PRIVATE_KEY_PATH = os.getenv("PASSBOLT_API_PRIVATE_KEY_PATH", "/app/keys/admin-private.asc").strip()
 PASSBOLT_API_PASSPHRASE = os.getenv("PASSBOLT_API_PASSPHRASE", "")
 PASSBOLT_API_VERIFY_TLS = os.getenv("PASSBOLT_API_VERIFY_TLS", str(PASSBOLT_VERIFY_TLS).lower()).lower() not in {"0", "false", "no"}
+PASSBOLT_API_CA_BUNDLE = os.getenv("PASSBOLT_API_CA_BUNDLE", "").strip()
 PASSBOLT_API_MFA_PROVIDER = (os.getenv("PASSBOLT_API_MFA_PROVIDER", "totp") or "totp").strip().lower()
 PASSBOLT_API_TOTP_SECRET = os.getenv("PASSBOLT_API_TOTP_SECRET", "").strip()
 PASSBOLT_API_TIMEOUT = int(os.getenv("PASSBOLT_API_TIMEOUT", "30"))
@@ -382,7 +383,7 @@ class PassboltGroupService:
                 f"{self.base_url}{path}",
                 json=payload,
                 timeout=PASSBOLT_API_TIMEOUT,
-                verify=PASSBOLT_API_VERIFY_TLS,
+                verify=self.auth.verify_setting,
                 headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self.session.headers)},
             )
             data: dict[str, Any] = {}
@@ -397,7 +398,7 @@ class PassboltGroupService:
                 message = response.text.strip()[:500]
             return response.status_code, data, message
         except requests.RequestException as error:
-            return 502, {}, str(error)
+            return 502, {}, _classify_request_error(error)
 
     def _extract_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(payload, dict):
@@ -563,6 +564,28 @@ def generate_totp_code(secret: str) -> str:
     return pyotp.TOTP(cleaned).now()
 
 
+def _passbolt_tls_verify_config() -> bool | str:
+    if not PASSBOLT_API_VERIFY_TLS:
+        return False
+    if PASSBOLT_API_CA_BUNDLE:
+        if not os.path.exists(PASSBOLT_API_CA_BUNDLE):
+            raise RuntimeError(f"PASSBOLT_API_CA_BUNDLE file not found: {PASSBOLT_API_CA_BUNDLE}")
+        return PASSBOLT_API_CA_BUNDLE
+    return True
+
+
+def _classify_request_error(error: Exception) -> str:
+    raw = str(error)
+    lowered = raw.lower()
+    if "certificate verify failed" in lowered or "unable to get local issuer certificate" in lowered:
+        if PASSBOLT_API_VERIFY_TLS and PASSBOLT_API_CA_BUNDLE:
+            return f"TLS certificate validation failed (CA bundle: {PASSBOLT_API_CA_BUNDLE}): {raw}"
+        if PASSBOLT_API_VERIFY_TLS:
+            return "TLS certificate validation failed. Configure PASSBOLT_API_CA_BUNDLE with the issuer CA chain or use a publicly trusted certificate."
+        return f"TLS certificate validation failed: {raw}"
+    return raw
+
+
 class PassboltApiAuthService:
     def __init__(self) -> None:
         self.base_url = PASSBOLT_API_BASE_URL or PASSBOLT_URL
@@ -571,6 +594,8 @@ class PassboltApiAuthService:
         self.private_key_path = PASSBOLT_API_PRIVATE_KEY_PATH
         self.passphrase = PASSBOLT_API_PASSPHRASE
         self.verify_tls = PASSBOLT_API_VERIFY_TLS
+        self.ca_bundle = PASSBOLT_API_CA_BUNDLE
+        self.verify_setting = _passbolt_tls_verify_config()
         self.mfa_provider = PASSBOLT_API_MFA_PROVIDER
         self.totp_secret = PASSBOLT_API_TOTP_SECRET
         self.timeout = PASSBOLT_API_TIMEOUT
@@ -587,7 +612,8 @@ class PassboltApiAuthService:
             "private_key_path": bool(self.private_key_path),
             "private_key_exists": bool(self.private_key_path and os.path.exists(self.private_key_path)),
             "passphrase": bool(self.passphrase),
-            "verify_tls": isinstance(self.verify_tls, bool),
+            "verify_tls": isinstance(self.verify_setting, (bool, str)),
+            "ca_bundle": (not self.verify_tls) or (not self.ca_bundle) or os.path.exists(self.ca_bundle),
             "mfa_provider": self.mfa_provider == "totp",
             "totp_secret": bool(self.totp_secret),
         }
@@ -604,6 +630,8 @@ class PassboltApiAuthService:
             "private_key_path_value": self.private_key_path,
             "mfa_provider_value": self.mfa_provider,
             "verify_tls_value": self.verify_tls,
+            "ca_bundle_path_value": self.ca_bundle,
+            "verify_mode": self.verify_setting if isinstance(self.verify_setting, str) else ("system" if self.verify_setting else "disabled"),
             "timeout": self.timeout,
         }
 
@@ -629,7 +657,7 @@ class PassboltApiAuthService:
             f"{self.base_url}{path}",
             json=json_payload,
             timeout=self.timeout,
-            verify=self.verify_tls,
+            verify=self.verify_setting,
             headers={"Accept": "application/json", "Content-Type": "application/json"},
         )
         data: dict[str, Any] = {}
@@ -776,7 +804,7 @@ class PassboltDeleteService:
                 method,
                 f"{self.base_url}{path}",
                 timeout=PASSBOLT_API_TIMEOUT,
-                verify=PASSBOLT_API_VERIFY_TLS,
+                verify=self.auth.verify_setting,
                 headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self.session.headers)},
             )
             payload: dict[str, Any] = {}
@@ -794,7 +822,7 @@ class PassboltDeleteService:
                 message = response.text.strip()[:500]
             return response.status_code, payload, message
         except requests.RequestException as error:
-            return 502, {}, str(error)
+            return 502, {}, _classify_request_error(error)
 
     def _extract_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(payload, list):
@@ -925,7 +953,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             _save_live_log("delete", "audit", "MFA TOTP configured and processed", batch_uuid=batch_uuid, event_code="delete.auth.mfa.info")
             log_delete_event(batch_uuid, "mfa", status="ok", message="MFA TOTP step processed")
     except Exception as error:
-        message = str(error)
+        message = _classify_request_error(error)
         if emit:
             emit({"type": "stderr", "message": message})
         _save_live_log("delete", "error", message, batch_uuid=batch_uuid, event_code="delete.auth.error")
@@ -1073,7 +1101,7 @@ def _process_rows(
         group_service.authenticate()
         _emit_structured(emit, "audit", "groups.auth.success", "JWT login success for groups API", batch_uuid=batch_uuid)
     except Exception as error:
-        _emit_structured(emit, "error", "groups.auth.failed", "Groups API authentication failed", batch_uuid=batch_uuid, error=str(error))
+        _emit_structured(emit, "error", "groups.auth.failed", "Groups API authentication failed", batch_uuid=batch_uuid, error=_classify_request_error(error))
 
     list_result = group_service.list_groups()
     if list_result["result"]["returncode"] == 0:
@@ -1417,7 +1445,7 @@ def retry_pending_group_assignments() -> Any:
     try:
         group_service.authenticate()
     except Exception as error:
-        return jsonify({"error": f"groups api authentication failed: {error}"}), 500
+        return jsonify({"error": f"Groups API authentication failed: {_classify_request_error(error)}"}), 500
 
     retried: list[dict[str, Any]] = []
     still_pending: list[dict[str, Any]] = []

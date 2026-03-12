@@ -8,6 +8,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/app/data
       - ./app/keys:/app/keys:ro
+      - ./certs:/app/certs:ro
     environment:
       - PASSBOLT_CONTAINER=${PASSBOLT_CONTAINER:-passbolt-passbolt-1}
       - PASSBOLT_CLI_PATH=${PASSBOLT_CLI_PATH:-/usr/share/php/passbolt/bin/cake}
@@ -21,6 +22,7 @@ services:
       - PASSBOLT_API_PRIVATE_KEY_PATH=${PASSBOLT_API_PRIVATE_KEY_PATH:-/app/keys/admin-private.asc}
       - PASSBOLT_API_PASSPHRASE=${PASSBOLT_API_PASSPHRASE:-@1!xM0RCh@128*/*$*$$}
       - PASSBOLT_API_VERIFY_TLS=${PASSBOLT_API_VERIFY_TLS:-true}
+      - PASSBOLT_API_CA_BUNDLE=${PASSBOLT_API_CA_BUNDLE:-}
       - PASSBOLT_API_MFA_PROVIDER=${PASSBOLT_API_MFA_PROVIDER:-totp}
       - PASSBOLT_API_TOTP_SECRET=${PASSBOLT_API_TOTP_SECRET:-NTUP3V5UUR2CC2ROHONDEVQGGEXJTPLIRZIC5FJXPWWCFYWSQGTQ}
       - PASSBOLT_API_TIMEOUT=${PASSBOLT_API_TIMEOUT:-30}

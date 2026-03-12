@@ -134,8 +134,8 @@ async function refreshLogsView() {
   try {
     const query = buildLogsQuery();
     const [logsPayload, summaryPayload] = await Promise.all([
-      apiGet(`/logs?${query.toString()}`),
-      apiGet(`/logs/summary?${query.toString()}`)
+      apiGet(`/api/logs?${query.toString()}`),
+      apiGet(`/api/logs/summary?${query.toString()}`)
     ]);
     renderLogsTable(logsPayload?.items || []);
     renderLogsSummaryBlock(summaryPayload || {});
@@ -374,7 +374,7 @@ function renderBatchUsers(batchUuid, users) {
 
 async function loadBatchDetails(batchUuid) {
   try {
-    const payload = await apiGet(`/batches/${encodeURIComponent(batchUuid)}`);
+    const payload = await apiGet(`/api/batches/${encodeURIComponent(batchUuid)}`);
     currentSelectedBatch = batchUuid;
     renderBatchUsers(batchUuid, payload.users || []);
   } catch (error) {
@@ -386,8 +386,8 @@ async function loadBatchDetails(batchUuid) {
 async function refreshHistoryData() {
   try {
     const [summaryPayload, batchesPayload] = await Promise.all([
-      apiGet('/db/summary'),
-      apiGet('/batches')
+      apiGet('/api/db/summary'),
+      apiGet('/api/batches')
     ]);
 
     renderDbSummary(summaryPayload);
@@ -397,7 +397,7 @@ async function refreshHistoryData() {
     const latest = summaryPayload?.last_batch;
     if (latest?.batch_uuid) {
       currentSelectedBatch = latest.batch_uuid;
-      const latestDetails = await apiGet(`/batches/${encodeURIComponent(latest.batch_uuid)}`);
+      const latestDetails = await apiGet(`/api/batches/${encodeURIComponent(latest.batch_uuid)}`);
       renderLastImportBlock(latest, latestDetails.users || []);
       renderBatchUsers(latest.batch_uuid, latestDetails.users || []);
     } else {
@@ -418,14 +418,14 @@ logsLevelFilter?.addEventListener('change', () => refreshLogsView());
 
 logsExportBtn?.addEventListener('click', () => {
   const query = buildLogsQuery().toString();
-  const url = query ? `/logs/export.csv?${query}` : '/logs/export.csv';
+  const url = query ? `/api/logs/export.csv?${query}` : '/api/logs/export.csv';
   window.location.href = url;
 });
 
 logsDeleteAllBtn?.addEventListener('click', async () => {
   if (!window.confirm('Confirmer la suppression de tous les logs ?')) return;
   try {
-    const response = await fetch('/logs', { method: 'DELETE' });
+    const response = await fetch('/api/logs', { method: 'DELETE' });
     if (!response.ok) {
       const errorMessage = await parseErrorResponse(response, 'Suppression des logs impossible');
       throw new Error(errorMessage);
@@ -447,7 +447,7 @@ logsDeleteBatchBtn?.addEventListener('click', async () => {
   }
   if (!window.confirm(`Confirmer la suppression des logs du batch ${batch} ?`)) return;
   try {
-    const response = await fetch(`/logs?batch_uuid=${encodeURIComponent(batch)}`, { method: 'DELETE' });
+    const response = await fetch(`/api/logs?batch_uuid=${encodeURIComponent(batch)}`, { method: 'DELETE' });
     if (!response.ok) {
       const errorMessage = await parseErrorResponse(response, 'Suppression des logs du batch impossible');
       throw new Error(errorMessage);
@@ -466,7 +466,7 @@ logsDeleteBatchBtn?.addEventListener('click', async () => {
 async function refreshDeleteConfigStatus() {
   if (!deleteConfigStatus) return true;
   try {
-    const payload = await apiGet('/delete-config-status');
+    const payload = await apiGet('/api/delete-config-status');
     const checks = payload?.checks || {};
     const checksInline = [
       `base_url=${checks.base_url ? 'ok' : 'ko'}`,
@@ -555,7 +555,7 @@ async function runDelete(previewOnly = false) {
     const batchUuid = resolveDeleteBatchSelection();
     if (batchUuid) body.batch_uuid = batchUuid;
 
-    const response = await fetch('/delete-users-stream', {
+    const response = await fetch('/api/delete-users-stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -626,7 +626,7 @@ uploadBtn.addEventListener('click', async () => {
   form.append('rollback_on_error', String(rollbackInput.checked));
 
   try {
-    const response = await fetch('/import-stream', { method: 'POST', body: form });
+    const response = await fetch('/api/import-stream', { method: 'POST', body: form });
     if (!response.ok || !response.body) throw new Error('Stream indisponible');
 
     const reader = response.body.getReader();
