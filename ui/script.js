@@ -17,6 +17,16 @@ const progressPercent = document.getElementById('progressPercent');
 const progressStage = document.getElementById('progressStage');
 const toast = document.getElementById('toast');
 const logsBox = document.getElementById('logs');
+const logsRows = document.getElementById('logsRows');
+const logsEmpty = document.getElementById('logsEmpty');
+const logsSummary = document.getElementById('logsSummary');
+const logsBatchFilter = document.getElementById('logsBatchFilter');
+const logsScopeFilter = document.getElementById('logsScopeFilter');
+const logsLevelFilter = document.getElementById('logsLevelFilter');
+const logsRefreshBtn = document.getElementById('logsRefreshBtn');
+const logsExportBtn = document.getElementById('logsExportBtn');
+const logsDeleteAllBtn = document.getElementById('logsDeleteAllBtn');
+const logsDeleteBatchBtn = document.getElementById('logsDeleteBatchBtn');
 const menuItems = document.querySelectorAll('.menu-item');
 const viewSections = document.querySelectorAll('.view-section');
 const dbSummary = document.getElementById('dbSummary');
@@ -27,6 +37,7 @@ const batchUsersRows = document.getElementById('batchUsersRows');
 const lastImportSummary = document.getElementById('lastImportSummary');
 
 let latestResults = [];
+let currentSelectedBatch = null;
 
 function setToastType(type = 'info') {
   toast.className = `toast toast-${type}`;
@@ -45,6 +56,9 @@ function switchView(viewId) {
   if (viewId === 'historyView') {
     refreshHistoryData();
   }
+  if (viewId === 'logsView') {
+    refreshLogsView();
+  }
 }
 
 menuItems.forEach((item) => {
@@ -59,6 +73,75 @@ function appendLog(kind, message, meta = null) {
   const metaText = meta ? ` | ${JSON.stringify(meta)}` : '';
   logsBox.textContent += `[${time}] [${kind}] ${message}${metaText}\n`;
   logsBox.scrollTop = logsBox.scrollHeight;
+}
+
+function getCurrentLogsBatch() {
+  const batchValue = logsBatchFilter?.value || '';
+  if (batchValue === '__all__') return '';
+  if (batchValue) return batchValue;
+  return currentSelectedBatch || '';
+}
+
+function logsLevelBadge(level) {
+  const normalized = (level || 'info').toLowerCase();
+  return `<span class="badge badge-level-${escapeHtml(normalized)}">${escapeHtml(normalized)}</span>`;
+}
+
+function buildLogsQuery() {
+  const params = new URLSearchParams();
+  const batch = getCurrentLogsBatch();
+  if (batch) params.set('batch_uuid', batch);
+  if (logsScopeFilter?.value) params.set('scope', logsScopeFilter.value);
+  if (logsLevelFilter?.value) params.set('level', logsLevelFilter.value);
+  return params;
+}
+
+function renderLogsSummaryBlock(payload) {
+  const byLevel = payload?.by_level || {};
+  const byScope = payload?.by_scope || {};
+  const last = payload?.last_log || null;
+  logsSummary.innerHTML = `
+    <div class="stat-item"><span>Total logs</span><strong>${payload?.total_logs || 0}</strong></div>
+    <div class="stat-item"><span>Par niveau</span><strong>${escapeHtml(JSON.stringify(byLevel))}</strong></div>
+    <div class="stat-item"><span>Par scope</span><strong>${escapeHtml(JSON.stringify(byScope))}</strong></div>
+    <div class="stat-item stat-wide"><span>Dernier log</span><strong>${escapeHtml(last?.message || 'Aucun')}</strong></div>
+  `;
+}
+
+function renderLogsTable(items = []) {
+  logsRows.innerHTML = '';
+  if (!items.length) {
+    logsEmpty.style.display = 'block';
+    return;
+  }
+  logsEmpty.style.display = 'none';
+  items.forEach((row) => {
+    logsRows.insertAdjacentHTML('beforeend', `
+      <tr>
+        <td>${escapeHtml(formatDate(row.created_at))}</td>
+        <td>${escapeHtml(row.scope || '')}</td>
+        <td>${logsLevelBadge(row.level)}</td>
+        <td>${escapeHtml(row.batch_uuid || '')}</td>
+        <td>${escapeHtml(row.email || '')}</td>
+        <td>${escapeHtml(row.message || '')}</td>
+      </tr>
+    `);
+  });
+}
+
+async function refreshLogsView() {
+  try {
+    const query = buildLogsQuery();
+    const [logsPayload, summaryPayload] = await Promise.all([
+      apiGet(`/logs?${query.toString()}`),
+      apiGet(`/logs/summary?${query.toString()}`)
+    ]);
+    renderLogsTable(logsPayload?.items || []);
+    renderLogsSummaryBlock(summaryPayload || {});
+  } catch (error) {
+    appendLog('ERR', `Logs indisponibles: ${error.message || String(error)}`);
+    showToast('Impossible de charger les logs', 'warning');
+  }
 }
 
 function appendAudit(payload) {
@@ -221,6 +304,11 @@ function renderBatches(items) {
     items.forEach((item) => { options.push(`<option value="${escapeHtml(item.batch_uuid)}">${escapeHtml(item.batch_uuid)} | ${escapeHtml(item.filename)}</option>`); });
     deleteBatchSelect.innerHTML = options.join('');
   }
+  if (logsBatchFilter) {
+    const options = ['<option value="__all__">Tous les batchs</option>'];
+    items.forEach((item) => { options.push(`<option value="${escapeHtml(item.batch_uuid)}">${escapeHtml(item.batch_uuid)} | ${escapeHtml(item.filename)}</option>`); });
+    logsBatchFilter.innerHTML = options.join('');
+  }
   if (!items.length) {
     batchesEmpty.style.display = 'block';
     return;
@@ -273,6 +361,7 @@ function renderBatchUsers(batchUuid, users) {
 async function loadBatchDetails(batchUuid) {
   try {
     const payload = await apiGet(`/batches/${encodeURIComponent(batchUuid)}`);
+    currentSelectedBatch = batchUuid;
     renderBatchUsers(batchUuid, payload.users || []);
   } catch (error) {
     appendLog('ERR', `Chargement batch impossible: ${error.message || String(error)}`);
@@ -293,6 +382,7 @@ async function refreshHistoryData() {
 
     const latest = summaryPayload?.last_batch;
     if (latest?.batch_uuid) {
+      currentSelectedBatch = latest.batch_uuid;
       const latestDetails = await apiGet(`/batches/${encodeURIComponent(latest.batch_uuid)}`);
       renderLastImportBlock(latest, latestDetails.users || []);
       renderBatchUsers(latest.batch_uuid, latestDetails.users || []);
@@ -306,6 +396,46 @@ async function refreshHistoryData() {
     showToast('Impossible de charger l’historique', 'warning');
   }
 }
+
+logsRefreshBtn?.addEventListener('click', () => refreshLogsView());
+logsBatchFilter?.addEventListener('change', () => refreshLogsView());
+logsScopeFilter?.addEventListener('change', () => refreshLogsView());
+logsLevelFilter?.addEventListener('change', () => refreshLogsView());
+
+logsExportBtn?.addEventListener('click', () => {
+  const query = buildLogsQuery().toString();
+  const url = query ? `/logs/export.csv?${query}` : '/logs/export.csv';
+  window.location.href = url;
+});
+
+logsDeleteAllBtn?.addEventListener('click', async () => {
+  if (!window.confirm('Confirmer la suppression de tous les logs ?')) return;
+  try {
+    await fetch('/logs', { method: 'DELETE' });
+    appendLog('INFO', 'Tous les logs ont été supprimés');
+    showToast('Logs supprimés', 'success');
+    await refreshLogsView();
+  } catch (error) {
+    showToast('Erreur suppression logs', 'error');
+  }
+});
+
+logsDeleteBatchBtn?.addEventListener('click', async () => {
+  const batch = getCurrentLogsBatch();
+  if (!batch) {
+    showToast('Sélectionnez un batch pour cette action', 'warning');
+    return;
+  }
+  if (!window.confirm(`Confirmer la suppression des logs du batch ${batch} ?`)) return;
+  try {
+    await fetch(`/logs?batch_uuid=${encodeURIComponent(batch)}`, { method: 'DELETE' });
+    appendLog('INFO', 'Logs batch supprimés', { batch_uuid: batch });
+    showToast('Logs batch supprimés', 'success');
+    await refreshLogsView();
+  } catch (error) {
+    showToast('Erreur suppression logs batch', 'error');
+  }
+});
 
 
 function deleteStatusBadge(status) {
@@ -480,3 +610,4 @@ uploadBtn.addEventListener('click', async () => {
 });
 
 refreshHistoryData();
+refreshLogsView();

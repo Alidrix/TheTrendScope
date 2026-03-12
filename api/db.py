@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -88,6 +89,26 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_delete_events_batch_uuid ON delete_events(batch_uuid)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS import_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                batch_uuid TEXT,
+                scope TEXT NOT NULL,
+                level TEXT NOT NULL,
+                event_code TEXT,
+                message TEXT NOT NULL,
+                email TEXT,
+                row_number INTEGER,
+                payload_json TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_import_logs_created_at ON import_logs(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_import_logs_batch_uuid ON import_logs(batch_uuid)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_import_logs_scope ON import_logs(scope)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_import_logs_level ON import_logs(level)")
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -232,6 +253,7 @@ def get_db_summary() -> dict[str, Any]:
         deletable_count = conn.execute(
             "SELECT COUNT(*) AS c FROM imported_users WHERE created_by_tool = 1 AND deletable_candidate = 1"
         ).fetchone()["c"]
+        logs_count = conn.execute("SELECT COUNT(*) AS c FROM import_logs").fetchone()["c"]
 
     return {
         "db_path": DB_PATH,
@@ -239,6 +261,7 @@ def get_db_summary() -> dict[str, Any]:
         "tracked_users_count": tracked_users_count,
         "tool_created_count": tool_created_count,
         "deletable_candidates_count": deletable_count,
+        "logs_count": logs_count,
         "last_batch": get_last_import_batch(),
     }
 
@@ -269,3 +292,102 @@ def log_delete_event(batch_uuid: str, event_type: str, status: str = "", message
             """,
             (batch_uuid, email, event_type, status, message, _utc_now_iso()),
         )
+
+
+def save_log(
+    scope: str,
+    level: str,
+    message: str,
+    batch_uuid: str | None = None,
+    event_code: str | None = None,
+    email: str | None = None,
+    row_number: int | None = None,
+    payload: dict[str, Any] | list[Any] | None = None,
+) -> None:
+    payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO import_logs (
+                created_at, batch_uuid, scope, level, event_code, message, email, row_number, payload_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (_utc_now_iso(), batch_uuid, scope, level, event_code, message, email, row_number, payload_json),
+        )
+
+
+def list_logs(batch_uuid: str | None = None, scope: str | None = None, level: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if batch_uuid:
+        clauses.append("batch_uuid = ?")
+        params.append(batch_uuid)
+    if scope:
+        clauses.append("scope = ?")
+        params.append(scope)
+    if level:
+        clauses.append("level = ?")
+        params.append(level)
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with _get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM import_logs
+            {where_sql}
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (*params, max(1, min(limit, 2000))),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def purge_logs(batch_uuid: str | None = None) -> int:
+    with _get_connection() as conn:
+        if batch_uuid:
+            cur = conn.execute("DELETE FROM import_logs WHERE batch_uuid = ?", (batch_uuid,))
+        else:
+            cur = conn.execute("DELETE FROM import_logs")
+    return cur.rowcount
+
+
+def get_logs_summary(batch_uuid: str | None = None, scope: str | None = None, level: str | None = None) -> dict[str, Any]:
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if batch_uuid:
+        clauses.append("batch_uuid = ?")
+        params.append(batch_uuid)
+    if scope:
+        clauses.append("scope = ?")
+        params.append(scope)
+    if level:
+        clauses.append("level = ?")
+        params.append(level)
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with _get_connection() as conn:
+        total = conn.execute(f"SELECT COUNT(*) AS c FROM import_logs {where_sql}", params).fetchone()["c"]
+        by_level_rows = conn.execute(
+            f"SELECT level, COUNT(*) AS c FROM import_logs {where_sql} GROUP BY level ORDER BY c DESC",
+            params,
+        ).fetchall()
+        by_scope_rows = conn.execute(
+            f"SELECT scope, COUNT(*) AS c FROM import_logs {where_sql} GROUP BY scope ORDER BY c DESC",
+            params,
+        ).fetchall()
+        last_log = conn.execute(
+            f"SELECT * FROM import_logs {where_sql} ORDER BY datetime(created_at) DESC, id DESC LIMIT 1",
+            params,
+        ).fetchone()
+
+    return {
+        "total_logs": total,
+        "by_level": {row["level"]: row["c"] for row in by_level_rows},
+        "by_scope": {row["scope"]: row["c"] for row in by_scope_rows},
+        "last_log": _row_to_dict(last_log),
+    }

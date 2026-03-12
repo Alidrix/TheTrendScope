@@ -135,7 +135,42 @@
 
       <section id="logsView" class="view-section">
         <section class="card">
-          <h3>Logs d'import</h3>
+          <h3>Historique des logs</h3>
+          <div id="logsSummary" class="stats-grid"></div>
+          <div class="controls-row logs-controls">
+            <label for="logsBatchFilter">Batch</label>
+            <select id="logsBatchFilter"></select>
+            <label for="logsScopeFilter">Scope</label>
+            <select id="logsScopeFilter">
+              <option value="">Tous</option>
+              <option value="import">import</option>
+              <option value="delete">delete</option>
+              <option value="system">system</option>
+              <option value="ui">ui</option>
+            </select>
+            <label for="logsLevelFilter">Niveau</label>
+            <select id="logsLevelFilter">
+              <option value="">Tous</option>
+              <option value="info">info</option>
+              <option value="warning">warning</option>
+              <option value="error">error</option>
+              <option value="debug">debug</option>
+              <option value="audit">audit</option>
+            </select>
+            <button id="logsRefreshBtn" class="btn-secondary" type="button">Rafraîchir</button>
+            <button id="logsExportBtn" class="btn-primary" type="button">Exporter les logs CSV</button>
+            <button id="logsDeleteBatchBtn" class="btn-danger" type="button">Supprimer les logs du batch</button>
+            <button id="logsDeleteAllBtn" class="btn-danger" type="button">Supprimer les logs</button>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th><th>Scope</th><th>Level</th><th>Batch UUID</th><th>Email</th><th>Message</th>
+              </tr>
+            </thead>
+            <tbody id="logsRows"></tbody>
+          </table>
+          <p id="logsEmpty" class="muted">Aucun log trouvé.</p>
           <div id="logs" class="logs"></div>
         </section>
       </section>

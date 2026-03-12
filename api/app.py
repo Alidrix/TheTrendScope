@@ -6,6 +6,7 @@ import re
 import shlex
 import time
 import uuid
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import Lock
 from typing import Any
@@ -23,10 +24,14 @@ from db import (
     get_db_summary,
     get_deletable_users_for_batch,
     get_last_import_batch,
+    get_logs_summary,
     init_db,
     is_latest_batch,
+    list_logs,
     list_import_batches,
     log_delete_event,
+    purge_logs,
+    save_log,
     save_imported_user,
     update_user_delete_state,
 )
@@ -410,10 +415,40 @@ def _append_pending(entry: dict[str, Any]) -> None:
 
 
 def _emit_structured(emit: Any, level: str, code: str, message: str, **extra: Any) -> None:
+    save_log(
+        scope="import",
+        level=level,
+        event_code=code,
+        message=message,
+        batch_uuid=(extra.get("batch_uuid") or None),
+        email=(extra.get("email") or None),
+        row_number=extra.get("row"),
+        payload=extra or None,
+    )
     if not emit:
         return
     payload = {"level": level, "code": code, "message": message, **extra}
     emit({"type": "audit", "payload": payload})
+
+
+def _save_live_log(scope: str, level: str, message: str, **extra: Any) -> None:
+    save_log(
+        scope=scope,
+        level=level,
+        message=message,
+        event_code=extra.get("event_code"),
+        batch_uuid=extra.get("batch_uuid"),
+        email=extra.get("email"),
+        row_number=extra.get("row_number"),
+        payload=extra.get("payload"),
+    )
+
+
+def _logs_filters_from_request() -> tuple[str | None, str | None, str | None]:
+    batch_uuid = (request.args.get("batch_uuid") or "").strip() or None
+    scope = (request.args.get("scope") or "").strip() or None
+    level = (request.args.get("level") or "").strip() or None
+    return batch_uuid, scope, level
 
 
 def _resolve_batch_status(import_status: str, success_count: int, error_count: int) -> str:
@@ -595,6 +630,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
     if emit:
         emit({"type": "log", "message": f"Delete batch {batch_uuid} started ({total} user(s))"})
         emit({"type": "progress", "payload": {"current": 0, "total": max(total, 1), "percent": 0, "stage": "load-batch"}})
+    _save_live_log("delete", "info", f"Delete batch {batch_uuid} started ({total} user(s))", batch_uuid=batch_uuid, event_code="delete.start")
 
     log_delete_event(batch_uuid, "batch_selected", status="info", message=f"dry_run_only={dry_run_only}")
 
@@ -602,6 +638,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
         message = "Passbolt delete API is not configured"
         if emit:
             emit({"type": "stderr", "message": message})
+        _save_live_log("delete", "error", message, batch_uuid=batch_uuid, event_code="delete.config.missing")
         return {"batch_uuid": batch_uuid, "status": "error", "message": message, "results": []}
 
     latest_batch = is_latest_batch(batch_uuid)
@@ -618,12 +655,14 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             row = _build_delete_result(email, batch_uuid, "SKIPPED_NOT_TOOL_MANAGED", message="User not created by tool")
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
+            _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.not_tool")
             continue
 
         if (not latest_batch) and activation_state_local not in DELETE_ALLOWED_PENDING_STATES:
             row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Old batches can only delete pending users", activation_state=activation_state_local)
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
+            _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.active")
             continue
 
         try:
@@ -632,12 +671,14 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             row = _build_delete_result(email, batch_uuid, "ERROR", message=str(error))
             results.append(row)
             log_delete_event(batch_uuid, "lookup", status=row["status"], message=row["message"], email=email)
+            _save_live_log("delete", "error", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.lookup.error")
             continue
 
         if not passbolt_user:
             row = _build_delete_result(email, batch_uuid, "NOT_FOUND", message="User not found in Passbolt")
             results.append(row)
             log_delete_event(batch_uuid, "lookup", status=row["status"], message=row["message"], email=email)
+            _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.lookup.not_found")
             continue
 
         user_id = str(passbolt_user.get("id") or passbolt_user.get("user_id") or "")
@@ -648,18 +689,21 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             row = _build_delete_result(email, batch_uuid, "SKIPPED_ADMIN", message="Admin users are always protected", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
+            _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.admin")
             continue
 
         if actual_role != "user":
             row = _build_delete_result(email, batch_uuid, "ERROR", message=f"Unsupported role: {actual_role}", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
+            _save_live_log("delete", "error", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.role")
             continue
 
         if activation_state in DELETE_ACTIVE_STATES:
             row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Activated account cannot be deleted", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
+            _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.activated")
             continue
 
         if emit:
@@ -669,9 +713,11 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             row = _build_delete_result(email, batch_uuid, "BLOCKED_BY_PASSBOLT", message=dry_message or "Dry-run rejected by Passbolt", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
             results.append(row)
             log_delete_event(batch_uuid, "dry_run", status=row["status"], message=row["message"], email=email)
+            _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.blocked")
             continue
 
         log_delete_event(batch_uuid, "dry_run", status="ok", message="dry-run success", email=email)
+        _save_live_log("delete", "audit", "dry-run success", batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.success")
         if dry_run_only:
             row = _build_delete_result(email, batch_uuid, "DELETED", message="Dry-run ok (preview only)", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
             results.append(row)
@@ -684,23 +730,27 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             row = _build_delete_result(email, batch_uuid, "ERROR", message=delete_message or "Delete failed", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
             results.append(row)
             log_delete_event(batch_uuid, "delete", status=row["status"], message=row["message"], email=email)
+            _save_live_log("delete", "error", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.execute.error")
             continue
 
         update_user_delete_state(batch_uuid=batch_uuid, email=email, activation_state="deleted", deletable_candidate=0)
         row = _build_delete_result(email, batch_uuid, "DELETED", message="User deleted", found=True, user_id=user_id, actual_role=actual_role, activation_state="deleted")
         results.append(row)
         log_delete_event(batch_uuid, "delete", status=row["status"], message=row["message"], email=email)
+        _save_live_log("delete", "audit", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.execute.success")
 
     status = "success" if all(item["status"] in {"DELETED", "SKIPPED_ADMIN", "SKIPPED_NOT_TOOL_MANAGED", "SKIPPED_ACTIVE_USER", "NOT_FOUND", "BLOCKED_BY_PASSBOLT"} for item in results) else "partial"
     if emit:
         emit({"type": "progress", "payload": {"current": total, "total": max(total, 1), "percent": 100, "stage": "done"}})
-    return {
+    result_payload = {
         "batch_uuid": batch_uuid,
         "status": status,
         "dry_run_only": dry_run_only,
         "total": total,
         "results": results,
     }
+    _save_live_log("delete", "info", "Delete batch finished", batch_uuid=batch_uuid, event_code="delete.done", payload={"status": status, "total": total, "dry_run_only": dry_run_only})
+    return result_payload
 
 
 
@@ -717,6 +767,7 @@ def _process_rows(
     preview = preview_rows(rows)
     batch_uuid = str(uuid.uuid4())
     create_import_batch(batch_uuid=batch_uuid, filename=source_filename, total_rows=len(rows), status="running")
+    _save_live_log("import", "info", "Import batch record created", batch_uuid=batch_uuid, event_code="import.batch.created", payload={"filename": source_filename, "total_rows": len(rows)})
 
     valid_rows = [row for row in preview["rows"] if row["valid"]]
     total_valid = len(valid_rows)
@@ -744,6 +795,7 @@ def _process_rows(
     for index, row in enumerate(preview["rows"], start=1):
         if time.time() - started > IMPORT_TOTAL_TIMEOUT:
             critical_error = True
+            _save_live_log("import", "error", f"global import timeout after {IMPORT_TOTAL_TIMEOUT}s", batch_uuid=batch_uuid, event_code="import.timeout", row_number=index, email=row.get("email", ""))
             results.append({
                 "email": row.get("email", ""),
                 "user_create_status": "error",
@@ -756,6 +808,7 @@ def _process_rows(
             break
 
         if not row["valid"]:
+            _save_live_log("import", "warning", "Invalid row skipped", batch_uuid=batch_uuid, row_number=index, email=row.get("email", ""), event_code="import.row.invalid", payload={"errors": row.get("errors", [])})
             save_imported_user(
                 batch_uuid=batch_uuid,
                 email=row.get("email", ""),
@@ -896,6 +949,7 @@ def _process_rows(
     _emit_structured(emit, "info", "import.done", "Import batch finished", status=final_status, users_created=len(created_users), errors=errors_count)
     batch_status = _resolve_batch_status(final_status, len(created_users), errors_count)
     finalize_import_batch(batch_uuid=batch_uuid, success_count=len(created_users), error_count=errors_count, status=batch_status)
+    _save_live_log("import", "audit", "Import batch finalized", batch_uuid=batch_uuid, event_code="import.batch.finalized", payload={"status": batch_status, "users_created": len(created_users), "errors": errors_count})
 
     return {
         "batch_uuid": batch_uuid,
@@ -950,8 +1004,11 @@ def debug_import() -> Any:
 def preview_csv() -> Any:
     rows, error = parse_csv_rows(request.files.get("file"))
     if error:
+        _save_live_log("import", "error", "Preview failed: invalid CSV payload", event_code="preview.invalid")
         return error
-    return jsonify(preview_rows(rows))
+    payload = preview_rows(rows)
+    _save_live_log("import", "info", "Preview generated", event_code="preview.done", payload={"total_rows": payload.get("total_rows", 0), "invalid_rows": payload.get("invalid_rows", 0)})
+    return jsonify(payload)
 
 
 @app.route("/import", methods=["POST"])
@@ -960,6 +1017,7 @@ def import_csv() -> Any:
     source_filename = (file_storage.filename if file_storage else "unknown.csv") or "unknown.csv"
     rows, error = parse_csv_rows(file_storage)
     if error:
+        _save_live_log("import", "error", "Import rejected: invalid CSV payload", event_code="import.invalid")
         return error
 
     rollback_on_error = str(request.form.get("rollback_on_error", "false")).lower() == "true"
@@ -978,6 +1036,7 @@ def import_csv_stream() -> Any:
     source_filename = (file_storage.filename if file_storage else "unknown.csv") or "unknown.csv"
     rows, error = parse_csv_rows(file_storage)
     if error:
+        _save_live_log("import", "error", "Import-stream rejected: invalid CSV payload", event_code="import.stream.invalid")
         return error
 
     rollback_on_error = str(request.form.get("rollback_on_error", "false")).lower() == "true"
@@ -987,6 +1046,7 @@ def import_csv_stream() -> Any:
 
     @stream_with_context
     def generate() -> Any:
+        _save_live_log("import", "info", f"Import stream started for {len(rows)} row(s)", event_code="import.stream.start")
         yield json.dumps({"type": "log", "message": f"Import started for {len(rows)} row(s)"}, ensure_ascii=False) + "\n"
         yield json.dumps({"type": "debug", "payload": diagnostics}, ensure_ascii=False) + "\n"
 
@@ -1008,6 +1068,7 @@ def import_csv_stream() -> Any:
             yield json.dumps(event, ensure_ascii=False) + "\n"
 
         payload["diagnostics"] = diagnostics
+        _save_live_log("import", "info", "Import stream completed", batch_uuid=payload.get("batch_uuid"), event_code="import.stream.done", payload={"status": payload.get("status"), "total": payload.get("total")})
         yield json.dumps({"type": "final", "payload": payload}, ensure_ascii=False) + "\n"
 
     return Response(generate(), mimetype="application/x-ndjson")
@@ -1097,6 +1158,69 @@ def delete_users_stream() -> Any:
         yield json.dumps({"type": "final", "payload": payload}, ensure_ascii=False) + "\n"
 
     return Response(generate(), mimetype="application/x-ndjson")
+
+
+@app.route("/logs", methods=["GET", "DELETE"])
+def logs_collection() -> Any:
+    batch_uuid, scope, level = _logs_filters_from_request()
+    if request.method == "DELETE":
+        deleted_count = purge_logs(batch_uuid=batch_uuid)
+        _save_live_log(
+            "system",
+            "audit",
+            "Logs purged",
+            batch_uuid=batch_uuid,
+            event_code="logs.purge",
+            payload={"deleted_count": deleted_count},
+        )
+        return jsonify({"status": "ok", "deleted_count": deleted_count, "batch_uuid": batch_uuid})
+
+    limit_arg = request.args.get("limit", "200")
+    try:
+        limit = int(limit_arg)
+    except ValueError:
+        limit = 200
+    items = list_logs(batch_uuid=batch_uuid, scope=scope, level=level, limit=limit)
+    return jsonify({"items": items, "count": len(items), "filters": {"batch_uuid": batch_uuid, "scope": scope, "level": level}})
+
+
+@app.route("/logs/summary", methods=["GET"])
+def logs_summary() -> Any:
+    batch_uuid, scope, level = _logs_filters_from_request()
+    payload = get_logs_summary(batch_uuid=batch_uuid, scope=scope, level=level)
+    payload["filters"] = {"batch_uuid": batch_uuid, "scope": scope, "level": level}
+    return jsonify(payload)
+
+
+@app.route("/logs/export.csv", methods=["GET"])
+def logs_export_csv() -> Any:
+    batch_uuid, scope, level = _logs_filters_from_request()
+    items = list_logs(batch_uuid=batch_uuid, scope=scope, level=level, limit=2000)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["id", "created_at", "batch_uuid", "scope", "level", "event_code", "message", "email", "row_number", "payload_json"])
+    for row in items:
+        writer.writerow([
+            row.get("id", ""),
+            row.get("created_at", ""),
+            row.get("batch_uuid", ""),
+            row.get("scope", ""),
+            row.get("level", ""),
+            row.get("event_code", ""),
+            row.get("message", ""),
+            row.get("email", ""),
+            row.get("row_number", ""),
+            row.get("payload_json", ""),
+        ])
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    filename = f"import_logs_{timestamp}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.route("/batches", methods=["GET"])
