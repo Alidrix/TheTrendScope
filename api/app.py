@@ -45,17 +45,13 @@ PASSBOLT_CONTAINER = os.getenv("PASSBOLT_CONTAINER", "passbolt-passbolt-1")
 PASSBOLT_CLI_PATH = os.getenv("PASSBOLT_CLI_PATH", "/usr/share/php/passbolt/bin/cake")
 IMPORT_COMMAND_TIMEOUT = int(os.getenv("IMPORT_COMMAND_TIMEOUT", "60"))
 IMPORT_TOTAL_TIMEOUT = int(os.getenv("IMPORT_TOTAL_TIMEOUT", "60"))
-GROUP_LIST_COMMAND = os.getenv("PASSBOLT_GROUP_LIST_COMMAND", "passbolt list_groups")
-GROUP_CREATE_COMMAND = os.getenv("PASSBOLT_GROUP_CREATE_COMMAND", "passbolt create_group -n {group}")
-GROUP_ASSIGN_COMMAND = os.getenv("PASSBOLT_GROUP_ASSIGN_COMMAND", "passbolt add_user_to_group -u {email} -g {group}")
 ROLLBACK_COMMAND = os.getenv("PASSBOLT_ROLLBACK_COMMAND", "")
-DELETE_USER_COMMAND = os.getenv("PASSBOLT_DELETE_USER_COMMAND", "passbolt delete_user -u {email}")
 PASSBOLT_URL = os.getenv("PASSBOLT_URL", "").rstrip("/")
 PASSBOLT_VERIFY_TLS = os.getenv("PASSBOLT_VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
 PASSBOLT_API_BASE_URL = os.getenv("PASSBOLT_API_BASE_URL", "").rstrip("/")
 PASSBOLT_API_AUTH_MODE = (os.getenv("PASSBOLT_API_AUTH_MODE", "jwt") or "jwt").strip().lower()
 PASSBOLT_API_USER_ID = os.getenv("PASSBOLT_API_USER_ID", "").strip()
-PASSBOLT_API_PRIVATE_KEY_PATH = os.getenv("PASSBOLT_API_PRIVATE_KEY_PATH", "").strip()
+PASSBOLT_API_PRIVATE_KEY_PATH = os.getenv("PASSBOLT_API_PRIVATE_KEY_PATH", "/app/keys/admin-private.asc").strip()
 PASSBOLT_API_PASSPHRASE = os.getenv("PASSBOLT_API_PASSPHRASE", "")
 PASSBOLT_API_VERIFY_TLS = os.getenv("PASSBOLT_API_VERIFY_TLS", str(PASSBOLT_VERIFY_TLS).lower()).lower() not in {"0", "false", "no"}
 PASSBOLT_API_MFA_PROVIDER = (os.getenv("PASSBOLT_API_MFA_PROVIDER", "totp") or "totp").strip().lower()
@@ -367,44 +363,104 @@ def create_user(email: str, first: str, last: str, role: str, container_name: st
     return result
 
 
-class GroupService:
-    def __init__(self, container_name: str, cli_path: str) -> None:
-        self.container_name = container_name
-        self.cli_path = cli_path
+class PassboltGroupService:
+    def __init__(self, auth_service: "PassboltApiAuthService") -> None:
+        self.auth = auth_service
+        self.session = auth_service._session
+        self.base_url = auth_service.base_url
+
+    def enabled(self) -> bool:
+        return self.auth.enabled()
+
+    def authenticate(self) -> dict[str, Any]:
+        return self.auth.authenticate()
+
+    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any], str]:
+        try:
+            response = self.session.request(
+                method,
+                f"{self.base_url}{path}",
+                json=payload,
+                timeout=PASSBOLT_API_TIMEOUT,
+                verify=PASSBOLT_API_VERIFY_TLS,
+                headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self.session.headers)},
+            )
+            data: dict[str, Any] = {}
+            try:
+                data = response.json() if response.text else {}
+            except Exception:
+                data = {}
+            message = ""
+            if isinstance(data, dict):
+                message = str(data.get("message") or data.get("error") or "")
+            if not message:
+                message = response.text.strip()[:500]
+            return response.status_code, data, message
+        except requests.RequestException as error:
+            return 502, {}, str(error)
+
+    def _extract_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        if isinstance(payload, dict):
+            body = payload.get("body")
+            if isinstance(body, list):
+                return [x for x in body if isinstance(x, dict)]
+            if isinstance(body, dict):
+                for key in ("items", "data", "groups", "users"):
+                    value = body.get(key)
+                    if isinstance(value, list):
+                        return [x for x in value if isinstance(x, dict)]
+            for key in ("items", "data", "groups", "users"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return [x for x in value if isinstance(x, dict)]
+        return []
 
     def list_groups(self) -> dict[str, Any]:
-        shell_command = f"{shlex.quote(self.cli_path)} {GROUP_LIST_COMMAND}"
-        result = _run_shell_command(self.container_name, self.cli_path, shell_command)
-        groups: set[str] = set()
-        if result["returncode"] == 0:
-            out = result.get("stdout", "")
-            try:
-                payload = json.loads(out) if out else []
-                if isinstance(payload, list):
-                    for item in payload:
-                        name = (item.get("name") if isinstance(item, dict) else "") or ""
-                        if name:
-                            groups.add(name.strip())
-            except Exception:
-                for line in out.splitlines():
-                    guess = line.strip(" -\t")
-                    if guess:
-                        groups.add(guess)
-        return {"result": result, "groups": groups}
+        status, payload, message = self._request("GET", "/groups.json")
+        groups = self._extract_items(payload)
+        if status >= 400:
+            return {"result": {"returncode": 1, "stderr": message, "stdout": ""}, "groups": set(), "items": []}
+        names = set()
+        for item in groups:
+            name = str(item.get("name") or "").strip()
+            if name:
+                names.add(name)
+        return {"result": {"returncode": 0, "stderr": "", "stdout": "ok"}, "groups": names, "items": groups}
+
+    def get_group_by_name(self, name: str) -> dict[str, Any] | None:
+        group_name = _sanitize_group_name(name)
+        status, payload, message = self._request("GET", f"/groups.json?filter[search]={requests.utils.quote(group_name)}")
+        if status >= 400:
+            raise RuntimeError(message or f"group lookup failed HTTP {status}")
+        for item in self._extract_items(payload):
+            if str(item.get("name") or "").strip().lower() == group_name.lower():
+                return item
+        return None
 
     def create_group(self, group_name: str) -> dict[str, Any]:
-        group_name = _sanitize_group_name(group_name)
-        shell_command = f"{shlex.quote(self.cli_path)} {GROUP_CREATE_COMMAND.format(group=shlex.quote(group_name))}"
-        return _run_shell_command(self.container_name, self.cli_path, shell_command)
+        cleaned = _sanitize_group_name(group_name)
+        status, _, message = self._request("POST", "/groups.json", {"name": cleaned})
+        if status < 300:
+            return {"returncode": 0, "stdout": "created", "stderr": ""}
+        return {"returncode": 1, "stdout": "", "stderr": message or "creation failed"}
 
-    def assign_user_to_group(self, email: str, group_name: str) -> dict[str, Any]:
-        group_name = _sanitize_group_name(group_name)
-        email = _sanitize_value("email", email)
-        shell_command = (
-            f"{shlex.quote(self.cli_path)} "
-            f"{GROUP_ASSIGN_COMMAND.format(email=shlex.quote(email), group=shlex.quote(group_name))}"
-        )
-        return _run_shell_command(self.container_name, self.cli_path, shell_command)
+    def find_user_by_email(self, email: str) -> dict[str, Any] | None:
+        address = _sanitize_value("email", email).lower()
+        status, payload, message = self._request("GET", f"/users.json?filter[search]={requests.utils.quote(address)}")
+        if status >= 400:
+            raise RuntimeError(message or f"user lookup failed HTTP {status}")
+        for item in self._extract_items(payload):
+            username = str(item.get("username") or item.get("email") or "").lower()
+            if username == address:
+                return item
+        return None
+
+    def assign_user_to_group(self, user_id: str, group_id: str) -> dict[str, Any]:
+        payload = {"user_id": user_id}
+        status, _, message = self._request("POST", f"/groups/{group_id}/users.json", payload)
+        if status < 300:
+            return {"returncode": 0, "stdout": "assigned", "stderr": ""}
+        return {"returncode": 1, "stdout": "", "stderr": message or "assignment failed"}
 
 
 def _extract_activation_link(stdout: str) -> str | None:
@@ -531,8 +587,8 @@ class PassboltApiAuthService:
             "private_key_path": bool(self.private_key_path),
             "private_key_exists": bool(self.private_key_path and os.path.exists(self.private_key_path)),
             "passphrase": bool(self.passphrase),
-            "verify_tls": bool((os.getenv("PASSBOLT_API_VERIFY_TLS") or os.getenv("PASSBOLT_VERIFY_TLS") or "").strip()),
-            "mfa_provider": bool(self.mfa_provider),
+            "verify_tls": isinstance(self.verify_tls, bool),
+            "mfa_provider": self.mfa_provider == "totp",
             "totp_secret": bool(self.totp_secret),
         }
         configured = all(checks.values())
@@ -995,7 +1051,8 @@ def _process_rows(
     emit: Any = None,
 ) -> dict[str, Any]:
     started = time.time()
-    group_service = GroupService(container, cli_path)
+    auth_service = PassboltApiAuthService()
+    group_service = PassboltGroupService(auth_service)
     preview = preview_rows(rows)
     batch_uuid = str(uuid.uuid4())
     create_import_batch(batch_uuid=batch_uuid, filename=source_filename, total_rows=len(rows), status="running")
@@ -1006,18 +1063,28 @@ def _process_rows(
     results: list[dict[str, Any]] = []
     created_users: list[str] = []
     created_groups_in_batch: set[str] = set()
-    known_groups: set[str] = set()
+    known_groups: dict[str, dict[str, Any]] = {}
     groups_created_total = 0
     groups_assigned_total = 0
     groups_deferred_total = 0
 
     _emit_structured(emit, "info", "import.start", "Import batch started", total_rows=len(rows), rollback_on_error=rollback_on_error)
+    try:
+        group_service.authenticate()
+        _emit_structured(emit, "audit", "groups.auth.success", "JWT login success for groups API", batch_uuid=batch_uuid)
+    except Exception as error:
+        _emit_structured(emit, "error", "groups.auth.failed", "Groups API authentication failed", batch_uuid=batch_uuid, error=str(error))
+
     list_result = group_service.list_groups()
     if list_result["result"]["returncode"] == 0:
-        known_groups = {g.lower(): g for g in list_result["groups"]}
+        for item in list_result.get("items", []):
+            group_name = str(item.get("name") or "").strip()
+            if group_name:
+                known_groups[group_name.lower()] = item
+        _emit_structured(emit, "info", "groups.list.success", "Groups list loaded", batch_uuid=batch_uuid, groups_count=len(known_groups))
     elif emit:
         emit({"type": "stderr", "message": "Impossible de lister les groupes, création best effort"})
-        _emit_structured(emit, "warning", "groups.list.failed", "Failed to list groups, using best effort")
+        _emit_structured(emit, "warning", "groups.list.failed", "Failed to list groups, using best effort", batch_uuid=batch_uuid)
 
     if emit:
         emit({"type": "progress", "payload": {"current": 0, "total": max(total_valid, 1), "percent": 0, "stage": "preview"}})
@@ -1095,23 +1162,32 @@ def _process_rows(
 
         for group in row.get("groups", []):
             normalized = group.lower()
-            if normalized not in known_groups:
+            group_item = known_groups.get(normalized)
+            if not group_item:
                 if emit:
                     emit({"type": "progress", "payload": {"current": index, "total": len(rows), "percent": int((index / max(len(rows), 1)) * 100), "stage": "create-group"}})
                 create_result = group_service.create_group(group)
-                if create_result["returncode"] == 0 or "already" in (create_result.get("stderr", "").lower()):
-                    if create_result["returncode"] == 0:
-                        groups_created_total += 1
-                        user_payload["groups_created"].append(group)
-                        created_groups_in_batch.add(group)
-                        _emit_structured(emit, "info", "group.create.success", "Group created", row=index, group=group, email=email)
-                    known_groups[normalized] = group
-                else:
+                if create_result["returncode"] == 0:
+                    groups_created_total += 1
+                    user_payload["groups_created"].append(group)
+                    created_groups_in_batch.add(group)
+                    _emit_structured(emit, "info", "group.create.success", "Group created", row=index, group=group, email=email)
+                elif "already" not in (create_result.get("stderr", "").lower()):
                     user_payload["errors"].append(f"group {group}: {create_result.get('stderr', 'creation failed')}")
                     _emit_structured(emit, "error", "group.create.failed", "Group creation failed", row=index, group=group, email=email, stderr=create_result.get("stderr", ""))
-                    if _critical_error(create_result):
-                        critical_error = True
                     continue
+                try:
+                    lookup_group = group_service.get_group_by_name(group)
+                except Exception as error:
+                    user_payload["errors"].append(f"group {group}: {error}")
+                    _emit_structured(emit, "error", "group.lookup.failed", "Group lookup failed", row=index, group=group, email=email, stderr=str(error))
+                    continue
+                if not lookup_group:
+                    user_payload["errors"].append(f"group {group}: lookup failed after creation")
+                    _emit_structured(emit, "error", "group.lookup.failed", "Group lookup failed", row=index, group=group, email=email)
+                    continue
+                group_item = lookup_group
+                known_groups[normalized] = group_item
 
             if emit:
                 emit({"type": "progress", "payload": {"current": index, "total": len(rows), "percent": int((index / max(len(rows), 1)) * 100), "stage": "assign-group"}})
@@ -1120,9 +1196,30 @@ def _process_rows(
                 user_payload["groups_deferred"].append(group)
                 groups_deferred_total += 1
                 _append_pending({"email": email, "group": group, "reason": "user creation failed", "status": "deferred"})
+                _emit_structured(emit, "warning", "group.defer", "Group assignment deferred", row=index, group=group, email=email, reason="user creation failed")
                 continue
 
-            assign_result = group_service.assign_user_to_group(email, group)
+            try:
+                user_obj = group_service.find_user_by_email(email)
+            except Exception as error:
+                reason = str(error)
+                user_payload["groups_deferred"].append(group)
+                groups_deferred_total += 1
+                _append_pending({"email": email, "group": group, "reason": reason, "status": "deferred"})
+                _emit_structured(emit, "warning", "group.assign.deferred", "Group assignment deferred", row=index, group=group, email=email, reason=reason)
+                continue
+
+            user_id = str((user_obj or {}).get("id") or "")
+            group_id = str((group_item or {}).get("id") or "")
+            if not user_id or not group_id:
+                reason = "missing user_id/group_id"
+                user_payload["groups_deferred"].append(group)
+                groups_deferred_total += 1
+                _append_pending({"email": email, "group": group, "reason": reason, "status": "deferred"})
+                _emit_structured(emit, "warning", "group.assign.deferred", "Group assignment deferred", row=index, group=group, email=email, reason=reason)
+                continue
+
+            assign_result = group_service.assign_user_to_group(user_id, group_id)
             if assign_result["returncode"] == 0:
                 user_payload["groups_assigned"].append(group)
                 groups_assigned_total += 1
@@ -1315,10 +1412,12 @@ def pending_group_assignments() -> Any:
 
 @app.route("/retry-pending-group-assignments", methods=["POST"])
 def retry_pending_group_assignments() -> Any:
-    diagnostics = diagnose_environment()
-    container = diagnostics.get("resolved_container", PASSBOLT_CONTAINER)
-    cli_path = diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH)
-    group_service = GroupService(container, cli_path)
+    auth_service = PassboltApiAuthService()
+    group_service = PassboltGroupService(auth_service)
+    try:
+        group_service.authenticate()
+    except Exception as error:
+        return jsonify({"error": f"groups api authentication failed: {error}"}), 500
 
     retried: list[dict[str, Any]] = []
     still_pending: list[dict[str, Any]] = []
@@ -1327,7 +1426,22 @@ def retry_pending_group_assignments() -> Any:
         PENDING_ASSIGNMENTS.clear()
 
     for item in current:
-        result = group_service.assign_user_to_group(item["email"], item["group"])
+        try:
+            user = group_service.find_user_by_email(item["email"])
+            group = group_service.get_group_by_name(item["group"])
+        except Exception as error:
+            item["reason"] = str(error)
+            still_pending.append(item)
+            continue
+
+        user_id = str((user or {}).get("id") or "")
+        group_id = str((group or {}).get("id") or "")
+        if not user_id or not group_id:
+            item["reason"] = "missing user_id/group_id"
+            still_pending.append(item)
+            continue
+
+        result = group_service.assign_user_to_group(user_id, group_id)
         if result["returncode"] == 0:
             retried.append({"email": item["email"], "group": item["group"], "status": "assigned"})
         else:
