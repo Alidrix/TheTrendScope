@@ -7,14 +7,24 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/app/data
+      - ./keys:/app/keys:ro
     environment:
       - PASSBOLT_CONTAINER=${PASSBOLT_CONTAINER:-passbolt-passbolt-1}
       - PASSBOLT_CLI_PATH=${PASSBOLT_CLI_PATH:-/usr/share/php/passbolt/bin/cake}
       - IMPORT_COMMAND_TIMEOUT=${IMPORT_COMMAND_TIMEOUT:-60}
       - IMPORT_TOTAL_TIMEOUT=${IMPORT_TOTAL_TIMEOUT:-60}
       - PASSBOLT_URL=${PASSBOLT_URL:-}
-      - PASSBOLT_API_TOKEN=${PASSBOLT_API_TOKEN:-}
       - PASSBOLT_VERIFY_TLS=${PASSBOLT_VERIFY_TLS:-true}
+      - PASSBOLT_API_BASE_URL=${PASSBOLT_API_BASE_URL:-}
+      - PASSBOLT_API_AUTH_MODE=${PASSBOLT_API_AUTH_MODE:-jwt}
+      - PASSBOLT_API_USER_ID=${PASSBOLT_API_USER_ID:-}
+      - PASSBOLT_API_PRIVATE_KEY_PATH=${PASSBOLT_API_PRIVATE_KEY_PATH:-/app/keys/admin-private.asc}
+      - PASSBOLT_API_PASSPHRASE=${PASSBOLT_API_PASSPHRASE:-}
+      - PASSBOLT_API_VERIFY_TLS=${PASSBOLT_API_VERIFY_TLS:-true}
+      - PASSBOLT_API_MFA_PROVIDER=${PASSBOLT_API_MFA_PROVIDER:-totp}
+      - PASSBOLT_API_TOTP_SECRET=${PASSBOLT_API_TOTP_SECRET:-}
+      - PASSBOLT_API_TIMEOUT=${PASSBOLT_API_TIMEOUT:-30}
+      - PASSBOLT_API_DEBUG=${PASSBOLT_API_DEBUG:-false}
     restart: unless-stopped
 
   importer-ui:

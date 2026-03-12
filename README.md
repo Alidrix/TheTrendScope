@@ -26,8 +26,17 @@ sudo docker compose up -d
 - `IMPORT_COMMAND_TIMEOUT` (défaut: `60`) : timeout (en secondes) d'une commande CLI d'import pour éviter un blocage infini.
 - `IMPORT_TOTAL_TIMEOUT` (défaut: `60`) : timeout global d'un import (au-delà, debug automatique).
 - `PASSBOLT_URL` : URL de l'instance Passbolt (ex: `https://passbolt.example.com`).
-- `PASSBOLT_API_TOKEN` : token API Bearer d'un compte admin Passbolt (obligatoire pour delete API).
-- `PASSBOLT_VERIFY_TLS` (défaut: `true`) : validation TLS API (`false` pour lab).
+- `PASSBOLT_VERIFY_TLS` (défaut: `true`) : validation TLS globale (`false` pour lab).
+- `PASSBOLT_API_BASE_URL` : URL API Passbolt (ex: `https://passbolt.karapasse.fr`).
+- `PASSBOLT_API_AUTH_MODE` (défaut: `jwt`) : mode d'auth API delete (JWT uniquement).
+- `PASSBOLT_API_USER_ID` : UUID du compte admin technique utilisé pour l'API delete.
+- `PASSBOLT_API_PRIVATE_KEY_PATH` : chemin de la clé privée GPG du compte API.
+- `PASSBOLT_API_PASSPHRASE` : passphrase de la clé privée GPG API.
+- `PASSBOLT_API_VERIFY_TLS` (défaut: `true`) : validation TLS pour l'API delete.
+- `PASSBOLT_API_MFA_PROVIDER` (défaut: `totp`) : provider MFA.
+- `PASSBOLT_API_TOTP_SECRET` : secret TOTP pour la vérification MFA automatique.
+- `PASSBOLT_API_TIMEOUT` (optionnel, défaut `30`) : timeout API en secondes.
+- `PASSBOLT_API_DEBUG` (optionnel, défaut `false`) : logs debug delete API.
 
 ## Format CSV attendu
 
@@ -52,6 +61,7 @@ Vous pouvez l'uploader directement dans l'UI.
 - `POST /delete-last-import-users` : supprime (ou prévisualise) les comptes du dernier batch SQLite.
 - `POST /delete-batch-users` : supprime (ou prévisualise) les comptes d'un batch précis (`batch_uuid`).
 - `POST /delete-users-stream` : suppression live NDJSON avec progression (`last batch` par défaut).
+- `GET /delete-config-status` : état de configuration JWT/MFA de la suppression API.
 
 ### Personnaliser les ports (éviter les conflits)
 

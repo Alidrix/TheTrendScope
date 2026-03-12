@@ -12,6 +12,8 @@ from threading import Lock
 from typing import Any
 
 import docker
+import gnupg
+import pyotp
 import requests
 from flask import Flask, Response, jsonify, request, stream_with_context
 
@@ -50,8 +52,17 @@ GROUP_ASSIGN_COMMAND = os.getenv("PASSBOLT_GROUP_ASSIGN_COMMAND", "passbolt add_
 ROLLBACK_COMMAND = os.getenv("PASSBOLT_ROLLBACK_COMMAND", "")
 DELETE_USER_COMMAND = os.getenv("PASSBOLT_DELETE_USER_COMMAND", "passbolt delete_user -u {email}")
 PASSBOLT_URL = os.getenv("PASSBOLT_URL", "").rstrip("/")
-PASSBOLT_API_TOKEN = os.getenv("PASSBOLT_API_TOKEN", "")
 PASSBOLT_VERIFY_TLS = os.getenv("PASSBOLT_VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
+PASSBOLT_API_BASE_URL = os.getenv("PASSBOLT_API_BASE_URL", "").rstrip("/")
+PASSBOLT_API_AUTH_MODE = (os.getenv("PASSBOLT_API_AUTH_MODE", "jwt") or "jwt").strip().lower()
+PASSBOLT_API_USER_ID = os.getenv("PASSBOLT_API_USER_ID", "").strip()
+PASSBOLT_API_PRIVATE_KEY_PATH = os.getenv("PASSBOLT_API_PRIVATE_KEY_PATH", "").strip()
+PASSBOLT_API_PASSPHRASE = os.getenv("PASSBOLT_API_PASSPHRASE", "")
+PASSBOLT_API_VERIFY_TLS = os.getenv("PASSBOLT_API_VERIFY_TLS", str(PASSBOLT_VERIFY_TLS).lower()).lower() not in {"0", "false", "no"}
+PASSBOLT_API_MFA_PROVIDER = (os.getenv("PASSBOLT_API_MFA_PROVIDER", "totp") or "totp").strip().lower()
+PASSBOLT_API_TOTP_SECRET = os.getenv("PASSBOLT_API_TOTP_SECRET", "").strip()
+PASSBOLT_API_TIMEOUT = int(os.getenv("PASSBOLT_API_TIMEOUT", "30"))
+PASSBOLT_API_DEBUG = os.getenv("PASSBOLT_API_DEBUG", "false").lower() in {"1", "true", "yes"}
 
 DELETE_ALLOWED_PENDING_STATES = {"pending", "unknown", "", None}
 DELETE_ACTIVE_STATES = {"active", "activated", "setup_completed", "enabled"}
@@ -490,31 +501,211 @@ def rollback_batch(created_users: list[str], container: str, cli_path: str) -> d
         "errors": errors,
     }
 
-class PassboltDeleteService:
+def generate_totp_code(secret: str) -> str:
+    cleaned = (secret or "").replace(" ", "")
+    if not cleaned:
+        raise RuntimeError("PASSBOLT_API_TOTP_SECRET is required for MFA TOTP")
+    return pyotp.TOTP(cleaned).now()
+
+
+class PassboltApiAuthService:
     def __init__(self) -> None:
-        self.base_url = PASSBOLT_URL
-        self.api_token = PASSBOLT_API_TOKEN
+        self.base_url = PASSBOLT_API_BASE_URL or PASSBOLT_URL
+        self.auth_mode = PASSBOLT_API_AUTH_MODE
+        self.user_id = PASSBOLT_API_USER_ID
+        self.private_key_path = PASSBOLT_API_PRIVATE_KEY_PATH
+        self.passphrase = PASSBOLT_API_PASSPHRASE
+        self.verify_tls = PASSBOLT_API_VERIFY_TLS
+        self.mfa_provider = PASSBOLT_API_MFA_PROVIDER
+        self.totp_secret = PASSBOLT_API_TOTP_SECRET
+        self.timeout = PASSBOLT_API_TIMEOUT
+        self.debug = PASSBOLT_API_DEBUG
+        self._session = requests.Session()
+        self._server_fingerprint: str | None = None
+        self._tokens: dict[str, Any] = {}
 
-    def enabled(self) -> bool:
-        return bool(self.base_url and self.api_token)
-
-    def _headers(self) -> dict[str, str]:
+    def config_status(self) -> dict[str, Any]:
+        base_url_present = bool(self.base_url)
+        key_present = bool(self.private_key_path and os.path.exists(self.private_key_path))
         return {
-            "Authorization": f"Bearer {self.api_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
+            "configured": all([base_url_present, self.auth_mode == "jwt", self.user_id, key_present]),
+            "auth_mode": self.auth_mode,
+            "base_url_present": base_url_present,
+            "user_id_present": bool(self.user_id),
+            "private_key_path_present": bool(self.private_key_path),
+            "private_key_exists": key_present,
+            "mfa_provider": self.mfa_provider,
+            "totp_configured": bool(self.totp_secret),
+            "verify_tls": self.verify_tls,
+            "timeout": self.timeout,
         }
 
-    def _request(self, method: str, path: str) -> tuple[int, dict[str, Any], str]:
-        if not self.enabled():
-            return 500, {}, "PASSBOLT_URL/PASSBOLT_API_TOKEN are not configured"
+    def enabled(self) -> bool:
+        return bool(self.config_status().get("configured"))
+
+    def _extract_server_public_key(self, payload: dict[str, Any]) -> str:
+        candidates: list[Any] = [payload, payload.get("body") if isinstance(payload, dict) else None]
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                for key in ("public_key", "server_public_key", "armored_key"):
+                    value = candidate.get(key)
+                    if isinstance(value, str) and "BEGIN PGP PUBLIC KEY BLOCK" in value:
+                        return value
+                fingerprint = candidate.get("fingerprint")
+                if isinstance(fingerprint, str) and fingerprint:
+                    self._server_fingerprint = fingerprint
+        raise RuntimeError("Unable to retrieve Passbolt server public key")
+
+    def _request_json(self, method: str, path: str, json_payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any], str]:
+        response = self._session.request(
+            method,
+            f"{self.base_url}{path}",
+            json=json_payload,
+            timeout=self.timeout,
+            verify=self.verify_tls,
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+        )
+        data: dict[str, Any] = {}
         try:
-            response = requests.request(
+            data = response.json() if response.text else {}
+        except Exception:
+            data = {}
+        return response.status_code, data, response.text[:500]
+
+    def _get_gpg(self) -> gnupg.GPG:
+        gpg = gnupg.GPG(gnupghome="/tmp/gnupg-api")
+        if not self.private_key_path or not os.path.exists(self.private_key_path):
+            raise RuntimeError(f"Private key file not found: {self.private_key_path}")
+        with open(self.private_key_path, "r", encoding="utf-8") as key_file:
+            import_result = gpg.import_keys(key_file.read())
+        if not import_result.fingerprints:
+            raise RuntimeError("Failed to import API private key")
+        return gpg
+
+    def _encrypt_for_server(self, gpg: gnupg.GPG, challenge_json: str, server_public_key: str) -> str:
+        import_result = gpg.import_keys(server_public_key)
+        if not import_result.fingerprints:
+            raise RuntimeError("Failed to import Passbolt server public key")
+        recipient = import_result.fingerprints[0]
+        encrypted = gpg.encrypt(challenge_json, recipients=[recipient], always_trust=True)
+        if not encrypted.ok:
+            raise RuntimeError(f"Unable to encrypt challenge for server: {encrypted.status}")
+        return str(encrypted)
+
+    def _decrypt_payload(self, gpg: gnupg.GPG, armored_payload: str) -> str:
+        decrypted = gpg.decrypt(armored_payload, passphrase=self.passphrase)
+        if not decrypted.ok:
+            raise RuntimeError(f"Unable to decrypt JWT login payload: {decrypted.status}")
+        return str(decrypted)
+
+    def _extract_challenge(self, payload: dict[str, Any]) -> tuple[str, str]:
+        body = payload.get("body") if isinstance(payload, dict) else None
+        source = body if isinstance(body, dict) else payload
+        challenge = (source or {}).get("challenge") or (source or {}).get("challenge_token")
+        challenge_id = (source or {}).get("challenge_id") or (source or {}).get("id")
+        if not challenge:
+            raise RuntimeError("JWT challenge missing in response")
+        return str(challenge), str(challenge_id or "")
+
+    def _verify_mfa_if_required(self, login_payload: dict[str, Any]) -> None:
+        providers = login_payload.get("mfa_providers") or login_payload.get("body", {}).get("mfa_providers") if isinstance(login_payload, dict) else None
+        if not providers:
+            return
+        if self.mfa_provider != "totp":
+            raise RuntimeError(f"Unsupported MFA provider: {self.mfa_provider}")
+        if "totp" not in [str(p).lower() for p in providers]:
+            raise RuntimeError("Passbolt requires MFA but TOTP provider is unavailable")
+        code = generate_totp_code(self.totp_secret)
+        status, payload, raw = self._request_json("POST", "/mfa/verify/totp.json", {"totp": code})
+        if status >= 400:
+            message = payload.get("message") if isinstance(payload, dict) else ""
+            raise RuntimeError(message or raw or f"MFA verify failed HTTP {status}")
+
+    def authenticate(self) -> dict[str, Any]:
+        if self.auth_mode != "jwt":
+            raise RuntimeError("Only PASSBOLT_API_AUTH_MODE=jwt is supported")
+        if not self.enabled():
+            raise RuntimeError("Passbolt delete API is not configured")
+
+        status, verify_payload, raw = self._request_json("GET", "/auth/verify.json")
+        if status >= 400:
+            raise RuntimeError(raw or f"Unable to call /auth/verify.json HTTP {status}")
+        server_public_key = self._extract_server_public_key(verify_payload)
+
+        status, challenge_payload, raw = self._request_json("GET", f"/auth/jwt/rsa-challenge.json?user_id={requests.utils.quote(self.user_id)}")
+        if status >= 400:
+            raise RuntimeError(raw or f"Unable to request JWT challenge HTTP {status}")
+        challenge, challenge_id = self._extract_challenge(challenge_payload)
+
+        gpg = self._get_gpg()
+        signed = gpg.sign(challenge, clearsign=False, detach=True, passphrase=self.passphrase)
+        if not signed:
+            raise RuntimeError("Unable to sign JWT challenge with API private key")
+
+        challenge_document = {
+            "version": "1.0.0",
+            "domain": self.base_url,
+            "verify_token": challenge,
+            "verify_token_signature": str(signed),
+            "user_id": self.user_id,
+        }
+        if challenge_id:
+            challenge_document["challenge_id"] = challenge_id
+
+        encrypted_challenge = self._encrypt_for_server(gpg, json.dumps(challenge_document), server_public_key)
+        login_body = {"challenge": encrypted_challenge, "user_id": self.user_id}
+        if challenge_id:
+            login_body["challenge_id"] = challenge_id
+
+        status, login_payload, raw = self._request_json("POST", "/auth/jwt/login.json", login_body)
+        if status >= 400:
+            message = login_payload.get("message") if isinstance(login_payload, dict) else ""
+            raise RuntimeError(message or raw or f"JWT login failed HTTP {status}")
+
+        decrypted_json = ""
+        encrypted_response = login_payload.get("body") if isinstance(login_payload, dict) else None
+        if isinstance(encrypted_response, str) and "BEGIN PGP MESSAGE" in encrypted_response:
+            decrypted_json = self._decrypt_payload(gpg, encrypted_response)
+        elif isinstance(login_payload.get("body"), dict):
+            decrypted_json = json.dumps(login_payload.get("body"))
+        else:
+            decrypted_json = json.dumps(login_payload)
+
+        try:
+            token_payload = json.loads(decrypted_json)
+        except Exception as error:
+            raise RuntimeError(f"Unable to parse JWT login payload: {error}") from error
+
+        self._tokens["access_token"] = token_payload.get("access_token") or token_payload.get("token")
+        self._tokens["refresh_token"] = token_payload.get("refresh_token")
+        if not self._tokens.get("access_token"):
+            raise RuntimeError("Missing access_token after JWT login")
+
+        self._session.headers.update({"Authorization": f"Bearer {self._tokens['access_token']}"})
+        self._verify_mfa_if_required(token_payload)
+        return {"access_token": self._tokens.get("access_token"), "refresh_token": self._tokens.get("refresh_token")}
+
+
+class PassboltUserDeleteService:
+    def __init__(self, auth_service: PassboltApiAuthService) -> None:
+        self.auth = auth_service
+        self.session = auth_service._session
+        self.base_url = auth_service.base_url
+
+    def enabled(self) -> bool:
+        return self.auth.enabled()
+
+    def authenticate(self) -> dict[str, Any]:
+        return self.auth.authenticate()
+
+    def _request(self, method: str, path: str) -> tuple[int, dict[str, Any], str]:
+        try:
+            response = self.session.request(
                 method,
                 f"{self.base_url}{path}",
-                headers=self._headers(),
-                timeout=30,
-                verify=PASSBOLT_VERIFY_TLS,
+                timeout=PASSBOLT_API_TIMEOUT,
+                verify=PASSBOLT_API_VERIFY_TLS,
+                headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self.session.headers)},
             )
             payload: dict[str, Any] = {}
             try:
@@ -523,10 +714,7 @@ class PassboltDeleteService:
                 payload = {}
             message = ""
             if isinstance(payload, dict):
-                for key in ("message", "error"):
-                    if payload.get(key):
-                        message = str(payload[key])
-                        break
+                message = str(payload.get("message") or payload.get("error") or "")
                 body = payload.get("body")
                 if not message and isinstance(body, dict):
                     message = str(body.get("message") or body.get("error") or "")
@@ -565,6 +753,15 @@ class PassboltDeleteService:
                 return item
         return None
 
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        status, payload, message = self._request("GET", f"/users/{user_id}.json")
+        if status >= 400:
+            raise RuntimeError(message or f"get user failed HTTP {status}")
+        body = payload.get("body") if isinstance(payload, dict) else None
+        if isinstance(body, dict):
+            return body
+        return payload if isinstance(payload, dict) else None
+
     def _resolve_role(self, user_payload: dict[str, Any]) -> str:
         role = user_payload.get("role")
         if isinstance(role, dict):
@@ -599,7 +796,7 @@ class PassboltDeleteService:
         status, payload, message = self._request("DELETE", f"/users/{user_id}/dry-run.json")
         return status < 300, message, payload
 
-    def delete_user_real(self, user_id: str) -> tuple[bool, str, dict[str, Any]]:
+    def delete_user(self, user_id: str) -> tuple[bool, str, dict[str, Any]]:
         status, payload, message = self._request("DELETE", f"/users/{user_id}.json")
         return status < 300, message, payload
 
@@ -624,21 +821,42 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
 
     users = get_batch_user_records(batch_uuid)
     total = len(users)
-    service = PassboltDeleteService()
+    auth_service = PassboltApiAuthService()
+    service = PassboltUserDeleteService(auth_service)
     results: list[dict[str, Any]] = []
 
     if emit:
         emit({"type": "log", "message": f"Delete batch {batch_uuid} started ({total} user(s))"})
         emit({"type": "progress", "payload": {"current": 0, "total": max(total, 1), "percent": 0, "stage": "load-batch"}})
     _save_live_log("delete", "info", f"Delete batch {batch_uuid} started ({total} user(s))", batch_uuid=batch_uuid, event_code="delete.start")
-
     log_delete_event(batch_uuid, "batch_selected", status="info", message=f"dry_run_only={dry_run_only}")
 
     if not service.enabled():
         message = "Passbolt delete API is not configured"
+        config_payload = auth_service.config_status()
         if emit:
             emit({"type": "stderr", "message": message})
-        _save_live_log("delete", "error", message, batch_uuid=batch_uuid, event_code="delete.config.missing")
+        _save_live_log("delete", "error", message, batch_uuid=batch_uuid, event_code="delete.config.missing", payload=config_payload)
+        log_delete_event(batch_uuid, "config", status="error", message=message)
+        return {"batch_uuid": batch_uuid, "status": "error", "message": message, "config": config_payload, "results": []}
+
+    try:
+        if emit:
+            emit({"type": "progress", "payload": {"current": 0, "total": max(total, 1), "percent": 0, "stage": "jwt-login"}})
+        service.authenticate()
+        _save_live_log("delete", "audit", "JWT login success", batch_uuid=batch_uuid, event_code="delete.auth.jwt.success")
+        log_delete_event(batch_uuid, "jwt_login", status="ok", message="JWT login success")
+        if auth_service.config_status().get("totp_configured"):
+            if emit:
+                emit({"type": "progress", "payload": {"current": 0, "total": max(total, 1), "percent": 0, "stage": "mfa"}})
+            _save_live_log("delete", "audit", "MFA TOTP configured and processed", batch_uuid=batch_uuid, event_code="delete.auth.mfa.info")
+            log_delete_event(batch_uuid, "mfa", status="ok", message="MFA TOTP step processed")
+    except Exception as error:
+        message = str(error)
+        if emit:
+            emit({"type": "stderr", "message": message})
+        _save_live_log("delete", "error", message, batch_uuid=batch_uuid, event_code="delete.auth.error")
+        log_delete_event(batch_uuid, "jwt_login", status="error", message=message)
         return {"batch_uuid": batch_uuid, "status": "error", "message": message, "results": []}
 
     latest_batch = is_latest_batch(batch_uuid)
@@ -686,21 +904,14 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
         activation_state = service._resolve_activation_state(passbolt_user, activation_state_local)
 
         if actual_role == "admin":
-            row = _build_delete_result(email, batch_uuid, "SKIPPED_ADMIN", message="Admin users are always protected", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_ADMIN", message="Compte administrateur protégé — suppression interdite", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.admin")
             continue
 
-        if actual_role != "user":
-            row = _build_delete_result(email, batch_uuid, "ERROR", message=f"Unsupported role: {actual_role}", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
-            results.append(row)
-            log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
-            _save_live_log("delete", "error", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.role")
-            continue
-
         if activation_state in DELETE_ACTIVE_STATES:
-            row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Activated account cannot be deleted", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Compte déjà activé/configuré — suppression interdite", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.activated")
@@ -725,7 +936,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
 
         if emit:
             emit({"type": "progress", "payload": {"current": index, "total": max(total, 1), "percent": round((index / max(total, 1)) * 100, 2), "stage": "delete"}})
-        delete_ok, delete_message, _ = service.delete_user_real(user_id)
+        delete_ok, delete_message, _ = service.delete_user(user_id)
         if not delete_ok:
             row = _build_delete_result(email, batch_uuid, "ERROR", message=delete_message or "Delete failed", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
             results.append(row)
@@ -1106,6 +1317,13 @@ def retry_pending_group_assignments() -> Any:
         PENDING_ASSIGNMENTS.extend(still_pending)
 
     return jsonify({"retried": retried, "pending": still_pending, "pending_total": len(still_pending)})
+
+
+@app.route("/delete-config-status", methods=["GET"])
+def delete_config_status() -> Any:
+    auth = PassboltApiAuthService()
+    payload = auth.config_status()
+    return jsonify(payload)
 
 
 @app.route("/delete-last-import-users", methods=["POST"])

@@ -6,6 +6,7 @@ const deletePreviewBtn = document.getElementById('deletePreviewBtn');
 const deleteExecuteBtn = document.getElementById('deleteExecuteBtn');
 const deleteResultsRows = document.getElementById('deleteResultsRows');
 const deleteEligibilitySummary = document.getElementById('deleteEligibilitySummary');
+const deleteConfigStatus = document.getElementById('deleteConfigStatus');
 const rollbackInput = document.getElementById('rollbackOnError');
 const resultsBody = document.getElementById('results');
 const usersRows = document.getElementById('usersRows');
@@ -166,6 +167,8 @@ function stageLabel(stage) {
     'dry-run': 'Dry-run',
     'lookup': 'Lookup',
     'load-batch': 'Chargement batch',
+    'jwt-login': 'Authentification JWT',
+    'mfa': 'Vérification MFA',
     'done': 'Terminé'
   }[stage] || stage;
 }
@@ -459,6 +462,23 @@ logsDeleteBatchBtn?.addEventListener('click', async () => {
 });
 
 
+
+async function refreshDeleteConfigStatus() {
+  if (!deleteConfigStatus) return true;
+  try {
+    const payload = await apiGet('/delete-config-status');
+    if (payload?.configured) {
+      deleteConfigStatus.textContent = 'API delete configurée: JWT + ' + (payload.totp_configured ? 'MFA TOTP' : 'sans MFA TOTP');
+      return true;
+    }
+    deleteConfigStatus.textContent = `API delete NON configurée (base_url=${payload?.base_url_present ? 'ok' : 'ko'}, user_id=${payload?.user_id_present ? 'ok' : 'ko'}, key=${payload?.private_key_exists ? 'ok' : 'ko'}, totp=${payload?.totp_configured ? 'ok' : 'ko'})`;
+    return false;
+  } catch (error) {
+    deleteConfigStatus.textContent = `Impossible de vérifier la config delete API: ${error.message || String(error)}`;
+    return false;
+  }
+}
+
 function deleteStatusBadge(status) {
   return `<span class="badge badge-delete badge-${escapeHtml(status || 'ERROR')}">${escapeHtml(status || 'n/a')}</span>`;
 }
@@ -508,6 +528,11 @@ function resolveDeleteBatchSelection() {
 }
 
 async function runDelete(previewOnly = false) {
+  const deleteConfigured = await refreshDeleteConfigStatus();
+  if (!deleteConfigured) {
+    showToast('API delete non configurée', 'warning');
+    return;
+  }
   deletePreviewBtn.disabled = true;
   deleteExecuteBtn.disabled = true;
   try {
@@ -636,3 +661,4 @@ uploadBtn.addEventListener('click', async () => {
 
 refreshHistoryData();
 refreshLogsView();
+refreshDeleteConfigStatus();
