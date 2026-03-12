@@ -74,6 +74,20 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_users_batch_uuid ON imported_users(batch_uuid)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_users_email ON imported_users(email)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_users_batch_email ON imported_users(batch_uuid, email)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS delete_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_uuid TEXT NOT NULL,
+                email TEXT,
+                event_type TEXT NOT NULL,
+                status TEXT,
+                message TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_delete_events_batch_uuid ON delete_events(batch_uuid)")
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -170,6 +184,20 @@ def get_batch_users(batch_uuid: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def get_batch_user_records(batch_uuid: str) -> list[dict[str, Any]]:
+    with _get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM imported_users
+            WHERE batch_uuid = ?
+            ORDER BY id ASC
+            """,
+            (batch_uuid,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_batch(batch_uuid: str) -> dict[str, Any] | None:
     with _get_connection() as conn:
         row = conn.execute("SELECT * FROM import_batches WHERE batch_uuid = ?", (batch_uuid,)).fetchone()
@@ -213,3 +241,31 @@ def get_db_summary() -> dict[str, Any]:
         "deletable_candidates_count": deletable_count,
         "last_batch": get_last_import_batch(),
     }
+
+
+def update_user_delete_state(batch_uuid: str, email: str, activation_state: str, deletable_candidate: int = 0) -> None:
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE imported_users
+            SET last_known_activation_state = ?, deletable_candidate = ?
+            WHERE batch_uuid = ? AND email = ?
+            """,
+            (activation_state, deletable_candidate, batch_uuid, email),
+        )
+
+
+def is_latest_batch(batch_uuid: str) -> bool:
+    latest = get_last_import_batch()
+    return bool(latest and latest.get("batch_uuid") == batch_uuid)
+
+
+def log_delete_event(batch_uuid: str, event_type: str, status: str = "", message: str = "", email: str = "") -> None:
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO delete_events (batch_uuid, email, event_type, status, message, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (batch_uuid, email, event_type, status, message, _utc_now_iso()),
+        )

@@ -12,6 +12,9 @@ services:
       - PASSBOLT_CLI_PATH=${PASSBOLT_CLI_PATH:-/usr/share/php/passbolt/bin/cake}
       - IMPORT_COMMAND_TIMEOUT=${IMPORT_COMMAND_TIMEOUT:-60}
       - IMPORT_TOTAL_TIMEOUT=${IMPORT_TOTAL_TIMEOUT:-60}
+      - PASSBOLT_URL=${PASSBOLT_URL:-}
+      - PASSBOLT_API_TOKEN=${PASSBOLT_API_TOKEN:-}
+      - PASSBOLT_VERIFY_TLS=${PASSBOLT_VERIFY_TLS:-true}
     restart: unless-stopped
 
   importer-ui:

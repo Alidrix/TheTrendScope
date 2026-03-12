@@ -1,6 +1,11 @@
 const fileInput = document.getElementById('file');
 const uploadBtn = document.getElementById('uploadBtn');
-const deleteLastBtn = document.getElementById('deleteLastBtn');
+const deleteBatchSelect = document.getElementById('deleteBatchSelect');
+const deleteDryRunOnly = document.getElementById('deleteDryRunOnly');
+const deletePreviewBtn = document.getElementById('deletePreviewBtn');
+const deleteExecuteBtn = document.getElementById('deleteExecuteBtn');
+const deleteResultsRows = document.getElementById('deleteResultsRows');
+const deleteEligibilitySummary = document.getElementById('deleteEligibilitySummary');
 const rollbackInput = document.getElementById('rollbackOnError');
 const resultsBody = document.getElementById('results');
 const usersRows = document.getElementById('usersRows');
@@ -74,6 +79,10 @@ function stageLabel(stage) {
     'create-user': 'Création utilisateur',
     'create-group': 'Création groupe',
     'assign-group': 'Assignation groupe',
+    'delete': 'Suppression',
+    'dry-run': 'Dry-run',
+    'lookup': 'Lookup',
+    'load-batch': 'Chargement batch',
     'done': 'Terminé'
   }[stage] || stage;
 }
@@ -207,6 +216,11 @@ function renderLastImportBlock(latestBatch, users = []) {
 
 function renderBatches(items) {
   batchesRows.innerHTML = '';
+  if (deleteBatchSelect) {
+    const options = ['<option value="__latest__">Dernier import (défaut)</option>'];
+    items.forEach((item) => { options.push(`<option value="${escapeHtml(item.batch_uuid)}">${escapeHtml(item.batch_uuid)} | ${escapeHtml(item.filename)}</option>`); });
+    deleteBatchSelect.innerHTML = options.join('');
+  }
   if (!items.length) {
     batchesEmpty.style.display = 'block';
     return;
@@ -293,29 +307,114 @@ async function refreshHistoryData() {
   }
 }
 
-async function deleteLastImportedUsers() {
-  deleteLastBtn.disabled = true;
-  try {
-    const response = await fetch('/delete-last-import-users', { method: 'POST' });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || 'Suppression impossible');
 
-    const deletedCount = (payload.deleted || []).length;
-    appendLog('INFO', 'Suppression des comptes du dernier import terminée', payload);
-    if (deletedCount > 0) {
-      latestResults = latestResults.filter((row) => !(payload.deleted || []).includes(row.email));
-      renderUsersPanel();
+function deleteStatusBadge(status) {
+  return `<span class="badge badge-delete badge-${escapeHtml(status || 'ERROR')}">${escapeHtml(status || 'n/a')}</span>`;
+}
+
+function renderDeleteResults(items = []) {
+  deleteResultsRows.innerHTML = '';
+  items.forEach((row) => {
+    deleteResultsRows.insertAdjacentHTML('beforeend', `
+      <tr>
+        <td>${escapeHtml(row.email)}</td>
+        <td>${escapeHtml(row.batch_uuid)}</td>
+        <td>${row.found ? '1' : '0'}</td>
+        <td>${escapeHtml(row.user_id || '')}</td>
+        <td>${escapeHtml(row.actual_role || '')}</td>
+        <td>${escapeHtml(row.activation_state || '')}</td>
+        <td>${deleteStatusBadge(row.status)}</td>
+        <td>${escapeHtml(row.message || '')}</td>
+      </tr>
+    `);
+  });
+}
+
+function renderDeleteEligibility(items = []) {
+  const counts = {};
+  items.forEach((item) => {
+    const key = item.status || 'UNKNOWN';
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  const deleted = counts.DELETED || 0;
+  const excluded = (counts.SKIPPED_ADMIN || 0) + (counts.SKIPPED_NOT_TOOL_MANAGED || 0) + (counts.SKIPPED_ACTIVE_USER || 0);
+  deleteEligibilitySummary.innerHTML = `
+    <li>Eligibles / supprimés: <strong>${deleted}</strong></li>
+    <li>Exclus: <strong>${excluded}</strong></li>
+    <li>SKIPPED_ADMIN: <strong>${counts.SKIPPED_ADMIN || 0}</strong></li>
+    <li>SKIPPED_NOT_TOOL_MANAGED: <strong>${counts.SKIPPED_NOT_TOOL_MANAGED || 0}</strong></li>
+    <li>SKIPPED_ACTIVE_USER: <strong>${counts.SKIPPED_ACTIVE_USER || 0}</strong></li>
+    <li>BLOCKED_BY_PASSBOLT: <strong>${counts.BLOCKED_BY_PASSBOLT || 0}</strong></li>
+    <li>NOT_FOUND: <strong>${counts.NOT_FOUND || 0}</strong></li>
+    <li>ERROR: <strong>${counts.ERROR || 0}</strong></li>
+  `;
+}
+
+function resolveDeleteBatchSelection() {
+  const selected = deleteBatchSelect?.value || '__latest__';
+  if (selected === '__latest__') return null;
+  return selected;
+}
+
+async function runDelete(previewOnly = false) {
+  deletePreviewBtn.disabled = true;
+  deleteExecuteBtn.disabled = true;
+  try {
+    const body = {
+      dry_run_only: previewOnly || Boolean(deleteDryRunOnly?.checked)
+    };
+    const batchUuid = resolveDeleteBatchSelection();
+    if (batchUuid) body.batch_uuid = batchUuid;
+
+    const response = await fetch('/delete-users-stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok || !response.body) throw new Error('Delete stream indisponible');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const event = JSON.parse(trimmed);
+        if (event.type === 'log') appendLog('INFO', event.message);
+        if (event.type === 'stderr') appendLog('ERR', event.message);
+        if (event.type === 'progress') {
+          const payload = event.payload || {};
+          setProgress(payload.percent || 0, payload.stage || 'preview');
+        }
+        if (event.type === 'final') {
+          const payload = event.payload || {};
+          renderDeleteResults(payload.results || []);
+          renderDeleteEligibility(payload.results || []);
+          appendLog('INFO', 'Delete batch terminé', { batch_uuid: payload.batch_uuid, status: payload.status, dry_run_only: payload.dry_run_only });
+          showToast(payload.dry_run_only ? 'Prévisualisation suppression terminée' : 'Suppression terminée', payload.status === 'success' ? 'success' : 'warning');
+          await refreshHistoryData();
+        }
+      }
     }
-    showToast(`Suppression terminée (${deletedCount} compte(s))`, deletedCount > 0 ? 'success' : 'warning');
   } catch (error) {
     appendLog('ERR', error.message || String(error));
-    showToast('Erreur suppression comptes', 'error');
+    showToast('Erreur suppression', 'error');
   } finally {
-    deleteLastBtn.disabled = false;
+    deletePreviewBtn.disabled = false;
+    deleteExecuteBtn.disabled = false;
   }
 }
 
-deleteLastBtn?.addEventListener('click', deleteLastImportedUsers);
+deletePreviewBtn?.addEventListener('click', () => runDelete(true));
+deleteExecuteBtn?.addEventListener('click', () => runDelete(false));
 
 uploadBtn.addEventListener('click', async () => {
   const file = fileInput.files[0];

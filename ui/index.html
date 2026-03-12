@@ -34,7 +34,27 @@
             <input type="file" id="file" accept=".csv" />
             <label class="check"><input type="checkbox" id="rollbackOnError" /> Rollback si erreur</label>
             <button id="uploadBtn" class="btn-primary">Importer</button>
-            <button id="deleteLastBtn" class="btn-danger" type="button">Suppression des comptes du dernier import</button>
+          </div>
+
+          <div class="delete-box">
+            <h3>Delete users from CSV</h3>
+            <p class="muted">Par défaut : suppression du dernier import.</p>
+            <div class="controls-row">
+              <label for="deleteBatchSelect">Batch cible</label>
+              <select id="deleteBatchSelect"></select>
+              <label class="check"><input type="checkbox" id="deleteDryRunOnly" checked /> Preview uniquement (dry-run)</label>
+              <button id="deletePreviewBtn" class="btn-secondary" type="button">Prévisualiser</button>
+              <button id="deleteExecuteBtn" class="btn-danger" type="button">Supprimer les utilisateurs</button>
+            </div>
+            <ul id="deleteEligibilitySummary" class="summary-list"></ul>
+            <table>
+              <thead>
+                <tr>
+                  <th>Email</th><th>Batch</th><th>Found</th><th>User ID</th><th>Role</th><th>Activation</th><th>Status</th><th>Message</th>
+                </tr>
+              </thead>
+              <tbody id="deleteResultsRows"></tbody>
+            </table>
           </div>
 
           <div class="progress"><div id="bar" class="bar"></div></div>

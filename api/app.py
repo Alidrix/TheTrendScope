@@ -11,19 +11,24 @@ from threading import Lock
 from typing import Any
 
 import docker
+import requests
 from flask import Flask, Response, jsonify, request, stream_with_context
 
 from db import (
     create_import_batch,
     finalize_import_batch,
     get_batch,
+    get_batch_user_records,
     get_batch_users,
     get_db_summary,
     get_deletable_users_for_batch,
     get_last_import_batch,
     init_db,
+    is_latest_batch,
     list_import_batches,
+    log_delete_event,
     save_imported_user,
+    update_user_delete_state,
 )
 
 app = Flask(__name__)
@@ -39,6 +44,12 @@ GROUP_CREATE_COMMAND = os.getenv("PASSBOLT_GROUP_CREATE_COMMAND", "passbolt crea
 GROUP_ASSIGN_COMMAND = os.getenv("PASSBOLT_GROUP_ASSIGN_COMMAND", "passbolt add_user_to_group -u {email} -g {group}")
 ROLLBACK_COMMAND = os.getenv("PASSBOLT_ROLLBACK_COMMAND", "")
 DELETE_USER_COMMAND = os.getenv("PASSBOLT_DELETE_USER_COMMAND", "passbolt delete_user -u {email}")
+PASSBOLT_URL = os.getenv("PASSBOLT_URL", "").rstrip("/")
+PASSBOLT_API_TOKEN = os.getenv("PASSBOLT_API_TOKEN", "")
+PASSBOLT_VERIFY_TLS = os.getenv("PASSBOLT_VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
+
+DELETE_ALLOWED_PENDING_STATES = {"pending", "unknown", "", None}
+DELETE_ACTIVE_STATES = {"active", "activated", "setup_completed", "enabled"}
 
 docker_client = docker.from_env()
 
@@ -47,8 +58,6 @@ SAFE_GROUP = re.compile(r"^[A-Za-z0-9 _@.\-']+$")
 SAFE_ROLE = {"user", "admin"}
 PENDING_ASSIGNMENTS: list[dict[str, Any]] = []
 PENDING_LOCK = Lock()
-LAST_IMPORTED_USERS: list[str] = []
-LAST_IMPORTED_USERS_LOCK = Lock()
 
 
 def _sanitize_value(name: str, value: str) -> str:
@@ -407,12 +416,6 @@ def _emit_structured(emit: Any, level: str, code: str, message: str, **extra: An
     emit({"type": "audit", "payload": payload})
 
 
-def _set_last_imported_users(users: list[str]) -> None:
-    with LAST_IMPORTED_USERS_LOCK:
-        LAST_IMPORTED_USERS.clear()
-        LAST_IMPORTED_USERS.extend(users)
-
-
 def _resolve_batch_status(import_status: str, success_count: int, error_count: int) -> str:
     if import_status == "success" and error_count == 0:
         return "completed"
@@ -451,6 +454,254 @@ def rollback_batch(created_users: list[str], container: str, cli_path: str) -> d
         "manual_required": bool(errors),
         "errors": errors,
     }
+
+class PassboltDeleteService:
+    def __init__(self) -> None:
+        self.base_url = PASSBOLT_URL
+        self.api_token = PASSBOLT_API_TOKEN
+
+    def enabled(self) -> bool:
+        return bool(self.base_url and self.api_token)
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    def _request(self, method: str, path: str) -> tuple[int, dict[str, Any], str]:
+        if not self.enabled():
+            return 500, {}, "PASSBOLT_URL/PASSBOLT_API_TOKEN are not configured"
+        try:
+            response = requests.request(
+                method,
+                f"{self.base_url}{path}",
+                headers=self._headers(),
+                timeout=30,
+                verify=PASSBOLT_VERIFY_TLS,
+            )
+            payload: dict[str, Any] = {}
+            try:
+                payload = response.json() if response.text else {}
+            except Exception:
+                payload = {}
+            message = ""
+            if isinstance(payload, dict):
+                for key in ("message", "error"):
+                    if payload.get(key):
+                        message = str(payload[key])
+                        break
+                body = payload.get("body")
+                if not message and isinstance(body, dict):
+                    message = str(body.get("message") or body.get("error") or "")
+            if not message:
+                message = response.text.strip()[:500]
+            return response.status_code, payload, message
+        except requests.RequestException as error:
+            return 502, {}, str(error)
+
+    def _extract_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            return [x for x in payload if isinstance(x, dict)]
+        if not isinstance(payload, dict):
+            return []
+        body = payload.get("body")
+        if isinstance(body, list):
+            return [x for x in body if isinstance(x, dict)]
+        if isinstance(body, dict):
+            for key in ("items", "users", "data"):
+                value = body.get(key)
+                if isinstance(value, list):
+                    return [x for x in value if isinstance(x, dict)]
+        for key in ("items", "users", "data"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [x for x in value if isinstance(x, dict)]
+        return []
+
+    def find_user_by_email(self, email: str) -> dict[str, Any] | None:
+        status, payload, message = self._request("GET", f"/users.json?filter[search]={requests.utils.quote(email)}")
+        if status >= 400:
+            raise RuntimeError(message or f"lookup failed HTTP {status}")
+        for item in self._extract_items(payload):
+            username = (item.get("username") or item.get("email") or "").lower()
+            if username == email.lower():
+                return item
+        return None
+
+    def _resolve_role(self, user_payload: dict[str, Any]) -> str:
+        role = user_payload.get("role")
+        if isinstance(role, dict):
+            role_name = (role.get("name") or role.get("slug") or "").lower()
+            if role_name:
+                return role_name
+        if isinstance(role, str):
+            return role.lower()
+        for key in ("role_name", "role_slug", "actual_role"):
+            value = user_payload.get(key)
+            if isinstance(value, str) and value:
+                return value.lower()
+        return "unknown"
+
+    def _resolve_activation_state(self, user_payload: dict[str, Any], fallback: str | None = None) -> str:
+        disabled = user_payload.get("disabled")
+        active = user_payload.get("active")
+        deleted = user_payload.get("deleted")
+        if deleted in (True, 1, "1"):
+            return "deleted"
+        if disabled in (True, 1, "1"):
+            return "disabled"
+        if active in (True, 1, "1"):
+            return "active"
+        if active in (False, 0, "0"):
+            return "pending"
+        if fallback in DELETE_ACTIVE_STATES:
+            return str(fallback)
+        return (fallback or "unknown").lower()
+
+    def delete_user_dry_run(self, user_id: str) -> tuple[bool, str, dict[str, Any]]:
+        status, payload, message = self._request("DELETE", f"/users/{user_id}/dry-run.json")
+        return status < 300, message, payload
+
+    def delete_user_real(self, user_id: str) -> tuple[bool, str, dict[str, Any]]:
+        status, payload, message = self._request("DELETE", f"/users/{user_id}.json")
+        return status < 300, message, payload
+
+
+def _build_delete_result(email: str, batch_uuid: str, status: str, message: str = "", found: bool = False, user_id: str = "", actual_role: str = "", activation_state: str = "") -> dict[str, Any]:
+    return {
+        "email": email,
+        "batch_uuid": batch_uuid,
+        "found": found,
+        "user_id": user_id,
+        "actual_role": actual_role,
+        "activation_state": activation_state,
+        "status": status,
+        "message": message,
+    }
+
+
+def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any = None) -> dict[str, Any]:
+    batch = get_batch(batch_uuid)
+    if not batch:
+        return {"error": "batch not found", "batch_uuid": batch_uuid}
+
+    users = get_batch_user_records(batch_uuid)
+    total = len(users)
+    service = PassboltDeleteService()
+    results: list[dict[str, Any]] = []
+
+    if emit:
+        emit({"type": "log", "message": f"Delete batch {batch_uuid} started ({total} user(s))"})
+        emit({"type": "progress", "payload": {"current": 0, "total": max(total, 1), "percent": 0, "stage": "load-batch"}})
+
+    log_delete_event(batch_uuid, "batch_selected", status="info", message=f"dry_run_only={dry_run_only}")
+
+    if not service.enabled():
+        message = "Passbolt delete API is not configured"
+        if emit:
+            emit({"type": "stderr", "message": message})
+        return {"batch_uuid": batch_uuid, "status": "error", "message": message, "results": []}
+
+    latest_batch = is_latest_batch(batch_uuid)
+
+    for index, user in enumerate(users, start=1):
+        email = (user.get("email") or "").strip().lower()
+        created_by_tool = int(user.get("created_by_tool") or 0) == 1
+        activation_state_local = (user.get("last_known_activation_state") or "unknown").lower()
+
+        if emit:
+            emit({"type": "progress", "payload": {"current": index, "total": max(total, 1), "percent": round((index / max(total, 1)) * 100, 2), "stage": "lookup"}})
+
+        if not created_by_tool:
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_NOT_TOOL_MANAGED", message="User not created by tool")
+            results.append(row)
+            log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
+            continue
+
+        if (not latest_batch) and activation_state_local not in DELETE_ALLOWED_PENDING_STATES:
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Old batches can only delete pending users", activation_state=activation_state_local)
+            results.append(row)
+            log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
+            continue
+
+        try:
+            passbolt_user = service.find_user_by_email(email)
+        except Exception as error:
+            row = _build_delete_result(email, batch_uuid, "ERROR", message=str(error))
+            results.append(row)
+            log_delete_event(batch_uuid, "lookup", status=row["status"], message=row["message"], email=email)
+            continue
+
+        if not passbolt_user:
+            row = _build_delete_result(email, batch_uuid, "NOT_FOUND", message="User not found in Passbolt")
+            results.append(row)
+            log_delete_event(batch_uuid, "lookup", status=row["status"], message=row["message"], email=email)
+            continue
+
+        user_id = str(passbolt_user.get("id") or passbolt_user.get("user_id") or "")
+        actual_role = service._resolve_role(passbolt_user)
+        activation_state = service._resolve_activation_state(passbolt_user, activation_state_local)
+
+        if actual_role == "admin":
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_ADMIN", message="Admin users are always protected", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            results.append(row)
+            log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
+            continue
+
+        if actual_role != "user":
+            row = _build_delete_result(email, batch_uuid, "ERROR", message=f"Unsupported role: {actual_role}", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            results.append(row)
+            log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
+            continue
+
+        if activation_state in DELETE_ACTIVE_STATES:
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Activated account cannot be deleted", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            results.append(row)
+            log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
+            continue
+
+        if emit:
+            emit({"type": "progress", "payload": {"current": index, "total": max(total, 1), "percent": round((index / max(total, 1)) * 100, 2), "stage": "dry-run"}})
+        dry_ok, dry_message, _ = service.delete_user_dry_run(user_id)
+        if not dry_ok:
+            row = _build_delete_result(email, batch_uuid, "BLOCKED_BY_PASSBOLT", message=dry_message or "Dry-run rejected by Passbolt", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            results.append(row)
+            log_delete_event(batch_uuid, "dry_run", status=row["status"], message=row["message"], email=email)
+            continue
+
+        log_delete_event(batch_uuid, "dry_run", status="ok", message="dry-run success", email=email)
+        if dry_run_only:
+            row = _build_delete_result(email, batch_uuid, "DELETED", message="Dry-run ok (preview only)", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            results.append(row)
+            continue
+
+        if emit:
+            emit({"type": "progress", "payload": {"current": index, "total": max(total, 1), "percent": round((index / max(total, 1)) * 100, 2), "stage": "delete"}})
+        delete_ok, delete_message, _ = service.delete_user_real(user_id)
+        if not delete_ok:
+            row = _build_delete_result(email, batch_uuid, "ERROR", message=delete_message or "Delete failed", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            results.append(row)
+            log_delete_event(batch_uuid, "delete", status=row["status"], message=row["message"], email=email)
+            continue
+
+        update_user_delete_state(batch_uuid=batch_uuid, email=email, activation_state="deleted", deletable_candidate=0)
+        row = _build_delete_result(email, batch_uuid, "DELETED", message="User deleted", found=True, user_id=user_id, actual_role=actual_role, activation_state="deleted")
+        results.append(row)
+        log_delete_event(batch_uuid, "delete", status=row["status"], message=row["message"], email=email)
+
+    status = "success" if all(item["status"] in {"DELETED", "SKIPPED_ADMIN", "SKIPPED_NOT_TOOL_MANAGED", "SKIPPED_ACTIVE_USER", "NOT_FOUND", "BLOCKED_BY_PASSBOLT"} for item in results) else "partial"
+    if emit:
+        emit({"type": "progress", "payload": {"current": total, "total": max(total, 1), "percent": 100, "stage": "done"}})
+    return {
+        "batch_uuid": batch_uuid,
+        "status": status,
+        "dry_run_only": dry_run_only,
+        "total": total,
+        "results": results,
+    }
+
 
 
 def _process_rows(
@@ -629,7 +880,6 @@ def _process_rows(
     final_status = "success"
     errors_count = sum(1 for item in results if item.get("user_create_status") != "success")
 
-    _set_last_imported_users(created_users)
 
     if critical_error and rollback_on_error:
         rollback = rollback_batch(created_users, container, cli_path)
@@ -799,36 +1049,58 @@ def retry_pending_group_assignments() -> Any:
 
 @app.route("/delete-last-import-users", methods=["POST"])
 def delete_last_import_users() -> Any:
-    diagnostics = diagnose_environment()
-    container = diagnostics.get("resolved_container", PASSBOLT_CONTAINER)
-    cli_path = diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH)
+    latest = get_last_import_batch()
+    if not latest:
+        return jsonify({"status": "no-op", "message": "no batch found", "results": []})
 
-    with LAST_IMPORTED_USERS_LOCK:
-        target_users = list(LAST_IMPORTED_USERS)
+    body = request.get_json(silent=True) or {}
+    dry_run_only = bool(body.get("dry_run_only", False))
+    payload = process_delete_batch(latest["batch_uuid"], dry_run_only=dry_run_only)
+    return jsonify(payload)
 
-    if not target_users:
-        return jsonify({"status": "no-op", "message": "no users from latest import", "deleted": [], "errors": []})
 
-    deleted: list[str] = []
-    errors: list[dict[str, str]] = []
+@app.route("/delete-batch-users", methods=["POST"])
+def delete_batch_users() -> Any:
+    body = request.get_json(silent=True) or {}
+    batch_uuid = (body.get("batch_uuid") or "").strip()
+    if not batch_uuid:
+        return jsonify({"error": "batch_uuid is required"}), 400
+    dry_run_only = bool(body.get("dry_run_only", False))
+    payload = process_delete_batch(batch_uuid, dry_run_only=dry_run_only)
+    if payload.get("error"):
+        return jsonify(payload), 404
+    return jsonify(payload)
 
-    for email in target_users:
-        shell_command = f"{shlex.quote(cli_path)} {DELETE_USER_COMMAND.format(email=shlex.quote(email))}"
-        result = _run_shell_command(container, cli_path, shell_command)
-        if result.get("returncode") == 0:
-            deleted.append(email)
-        else:
-            errors.append({"email": email, "error": result.get("stderr", "delete failed")})
 
-    if deleted:
-        with LAST_IMPORTED_USERS_LOCK:
-            LAST_IMPORTED_USERS[:] = [email for email in LAST_IMPORTED_USERS if email not in deleted]
+@app.route("/delete-users-stream", methods=["POST"])
+def delete_users_stream() -> Any:
+    body = request.get_json(silent=True) or {}
+    batch_uuid = (body.get("batch_uuid") or "").strip()
+    dry_run_only = bool(body.get("dry_run_only", False))
 
-    status = "success" if not errors else "partial"
-    return jsonify({"status": status, "deleted": deleted, "errors": errors, "total_requested": len(target_users)})
+    if not batch_uuid:
+        latest = get_last_import_batch()
+        if not latest:
+            return jsonify({"error": "no batch found"}), 404
+        batch_uuid = latest["batch_uuid"]
+
+    @stream_with_context
+    def generate() -> Any:
+        events: list[dict[str, Any]] = []
+
+        def emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
+        payload = process_delete_batch(batch_uuid, dry_run_only=dry_run_only, emit=emit)
+        for event in events:
+            yield json.dumps(event, ensure_ascii=False) + "\n"
+        yield json.dumps({"type": "final", "payload": payload}, ensure_ascii=False) + "\n"
+
+    return Response(generate(), mimetype="application/x-ndjson")
 
 
 @app.route("/batches", methods=["GET"])
+
 def batches() -> Any:
     return jsonify({"items": list_import_batches()})
 

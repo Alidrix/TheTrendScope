@@ -94,3 +94,18 @@ tbody tr:hover { background: var(--bg-page); }
 .stat-item strong { color: var(--text-main); }
 .stat-wide { grid-column: 1 / -1; }
 .btn-small { padding: 6px 9px; font-size: 12px; }
+
+
+.btn-secondary { background: var(--info); color: var(--text-on-accent); }
+.btn-secondary:hover { filter: brightness(0.95); }
+select { background: var(--bg-card); border: 1px solid var(--border-soft); border-radius: 8px; color: var(--text-main); padding: 8px; min-width: 280px; }
+.delete-box { margin-top: 14px; border-top: 1px dashed var(--border-soft); padding-top: 12px; }
+
+.badge-delete { color: #fff; border: none; }
+.badge-DELETED { background: #2f9e44; }
+.badge-SKIPPED_ADMIN { background: #6f42c1; }
+.badge-SKIPPED_NOT_TOOL_MANAGED { background: #5c677d; }
+.badge-SKIPPED_ACTIVE_USER { background: #f08c00; }
+.badge-BLOCKED_BY_PASSBOLT { background: #d9480f; }
+.badge-ERROR { background: #c92a2a; }
+.badge-NOT_FOUND { background: #868e96; }

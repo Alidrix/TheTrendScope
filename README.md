@@ -25,7 +25,9 @@ sudo docker compose up -d
 - `PASSBOLT_CLI_PATH` (défaut: `/usr/share/php/passbolt/bin/cake`) : chemin vers la commande `cake` dans le conteneur Passbolt.
 - `IMPORT_COMMAND_TIMEOUT` (défaut: `60`) : timeout (en secondes) d'une commande CLI d'import pour éviter un blocage infini.
 - `IMPORT_TOTAL_TIMEOUT` (défaut: `60`) : timeout global d'un import (au-delà, debug automatique).
-- `PASSBOLT_DELETE_USER_COMMAND` (défaut: `passbolt delete_user -u {email}`) : commande CLI pour supprimer les comptes du dernier import.
+- `PASSBOLT_URL` : URL de l'instance Passbolt (ex: `https://passbolt.example.com`).
+- `PASSBOLT_API_TOKEN` : token API Bearer d'un compte admin Passbolt (obligatoire pour delete API).
+- `PASSBOLT_VERIFY_TLS` (défaut: `true`) : validation TLS API (`false` pour lab).
 
 ## Format CSV attendu
 
@@ -47,7 +49,9 @@ Vous pouvez l'uploader directement dans l'UI.
 - `POST /import-stream` : même import mais en flux NDJSON pour afficher les commandes/logs en temps réel dans l'UI.
 - `GET /health` : vérification rapide du service + auto-détection container/CLI.
 - `GET /debug/import` : diagnostic détaillé (checks + recommandations).
-- `POST /delete-last-import-users` : supprime uniquement les comptes créés lors du dernier import CSV exécuté.
+- `POST /delete-last-import-users` : supprime (ou prévisualise) les comptes du dernier batch SQLite.
+- `POST /delete-batch-users` : supprime (ou prévisualise) les comptes d'un batch précis (`batch_uuid`).
+- `POST /delete-users-stream` : suppression live NDJSON avec progression (`last batch` par défaut).
 
 ### Personnaliser les ports (éviter les conflits)
 
@@ -103,3 +107,11 @@ les logos versionnés dans ce dépôt restent en **SVG** (`ui/assets/*.svg`).
 Si vous voulez tester localement un `favicon.png` ou un `passbolt.png`,
 ajoutez-les uniquement en local (sans commit Git) ou via votre pipeline de déploiement.
 
+
+## Rebuild complet
+
+```bash
+sudo docker compose down
+sudo docker compose build --no-cache
+sudo docker compose up -d
+```
