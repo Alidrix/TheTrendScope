@@ -21,7 +21,6 @@ from db import (
     create_import_batch,
     finalize_import_batch,
     get_batch,
-    get_batch_user_records,
     get_batch_users,
     get_db_summary,
     get_deletable_users_for_batch,
@@ -525,18 +524,30 @@ class PassboltApiAuthService:
         self._tokens: dict[str, Any] = {}
 
     def config_status(self) -> dict[str, Any]:
-        base_url_present = bool(self.base_url)
-        key_present = bool(self.private_key_path and os.path.exists(self.private_key_path))
+        checks = {
+            "base_url": bool(self.base_url),
+            "auth_mode": self.auth_mode == "jwt",
+            "user_id": bool(self.user_id),
+            "private_key_path": bool(self.private_key_path),
+            "private_key_exists": bool(self.private_key_path and os.path.exists(self.private_key_path)),
+            "passphrase": bool(self.passphrase),
+            "verify_tls": bool((os.getenv("PASSBOLT_API_VERIFY_TLS") or os.getenv("PASSBOLT_VERIFY_TLS") or "").strip()),
+            "mfa_provider": bool(self.mfa_provider),
+            "totp_secret": bool(self.totp_secret),
+        }
+        configured = all(checks.values())
+        missing = [name for name, ok in checks.items() if not ok]
+        message = "Passbolt delete API is fully configured" if configured else (
+            "Configuration incomplète: " + ", ".join(missing)
+        )
         return {
-            "configured": all([base_url_present, self.auth_mode == "jwt", self.user_id, key_present]),
-            "auth_mode": self.auth_mode,
-            "base_url_present": base_url_present,
-            "user_id_present": bool(self.user_id),
-            "private_key_path_present": bool(self.private_key_path),
-            "private_key_exists": key_present,
-            "mfa_provider": self.mfa_provider,
-            "totp_configured": bool(self.totp_secret),
-            "verify_tls": self.verify_tls,
+            "configured": configured,
+            "checks": checks,
+            "message": message,
+            "auth_mode_value": self.auth_mode,
+            "private_key_path_value": self.private_key_path,
+            "mfa_provider_value": self.mfa_provider,
+            "verify_tls_value": self.verify_tls,
             "timeout": self.timeout,
         }
 
@@ -608,7 +619,12 @@ class PassboltApiAuthService:
         return str(challenge), str(challenge_id or "")
 
     def _verify_mfa_if_required(self, login_payload: dict[str, Any]) -> None:
-        providers = login_payload.get("mfa_providers") or login_payload.get("body", {}).get("mfa_providers") if isinstance(login_payload, dict) else None
+        providers = None
+        if isinstance(login_payload, dict):
+            providers = login_payload.get("mfa_providers")
+            body = login_payload.get("body")
+            if not providers and isinstance(body, dict):
+                providers = body.get("mfa_providers")
         if not providers:
             return
         if self.mfa_provider != "totp":
@@ -686,7 +702,7 @@ class PassboltApiAuthService:
         return {"access_token": self._tokens.get("access_token"), "refresh_token": self._tokens.get("refresh_token")}
 
 
-class PassboltUserDeleteService:
+class PassboltDeleteService:
     def __init__(self, auth_service: PassboltApiAuthService) -> None:
         self.auth = auth_service
         self.session = auth_service._session
@@ -819,10 +835,10 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
     if not batch:
         return {"error": "batch not found", "batch_uuid": batch_uuid}
 
-    users = get_batch_user_records(batch_uuid)
+    users = get_deletable_users_for_batch(batch_uuid)
     total = len(users)
     auth_service = PassboltApiAuthService()
-    service = PassboltUserDeleteService(auth_service)
+    service = PassboltDeleteService(auth_service)
     results: list[dict[str, Any]] = []
 
     if emit:
@@ -838,6 +854,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             emit({"type": "stderr", "message": message})
         _save_live_log("delete", "error", message, batch_uuid=batch_uuid, event_code="delete.config.missing", payload=config_payload)
         log_delete_event(batch_uuid, "config", status="error", message=message)
+        log_delete_event(batch_uuid, "batch_selected", status="info", message=f"selected_batch={batch_uuid}")
         return {"batch_uuid": batch_uuid, "status": "error", "message": message, "config": config_payload, "results": []}
 
     try:
@@ -846,7 +863,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
         service.authenticate()
         _save_live_log("delete", "audit", "JWT login success", batch_uuid=batch_uuid, event_code="delete.auth.jwt.success")
         log_delete_event(batch_uuid, "jwt_login", status="ok", message="JWT login success")
-        if auth_service.config_status().get("totp_configured"):
+        if auth_service.config_status().get("checks", {}).get("totp_secret"):
             if emit:
                 emit({"type": "progress", "payload": {"current": 0, "total": max(total, 1), "percent": 0, "stage": "mfa"}})
             _save_live_log("delete", "audit", "MFA TOTP configured and processed", batch_uuid=batch_uuid, event_code="delete.auth.mfa.info")
@@ -877,7 +894,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             continue
 
         if (not latest_batch) and activation_state_local not in DELETE_ALLOWED_PENDING_STATES:
-            row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Old batches can only delete pending users", activation_state=activation_state_local)
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Anciens batches: seuls les comptes non activés sont supprimables", activation_state=activation_state_local)
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.active")
@@ -929,8 +946,10 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
 
         log_delete_event(batch_uuid, "dry_run", status="ok", message="dry-run success", email=email)
         _save_live_log("delete", "audit", "dry-run success", batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.success")
+        if emit:
+            emit({"type": "stdout", "message": f"dry-run ok: {email}"})
         if dry_run_only:
-            row = _build_delete_result(email, batch_uuid, "DELETED", message="Dry-run ok (preview only)", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            row = _build_delete_result(email, batch_uuid, "DRY_RUN_OK", message="Dry-run ok (preview only)", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
             results.append(row)
             continue
 
@@ -949,8 +968,10 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
         results.append(row)
         log_delete_event(batch_uuid, "delete", status=row["status"], message=row["message"], email=email)
         _save_live_log("delete", "audit", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.execute.success")
+        if emit:
+            emit({"type": "stdout", "message": f"deleted: {email}"})
 
-    status = "success" if all(item["status"] in {"DELETED", "SKIPPED_ADMIN", "SKIPPED_NOT_TOOL_MANAGED", "SKIPPED_ACTIVE_USER", "NOT_FOUND", "BLOCKED_BY_PASSBOLT"} for item in results) else "partial"
+    status = "success" if all(item["status"] in {"DELETED", "DRY_RUN_OK", "SKIPPED_ADMIN", "SKIPPED_NOT_TOOL_MANAGED", "SKIPPED_ACTIVE_USER", "NOT_FOUND", "BLOCKED_BY_PASSBOLT"} for item in results) else "partial"
     if emit:
         emit({"type": "progress", "payload": {"current": total, "total": max(total, 1), "percent": 100, "stage": "done"}})
     result_payload = {
@@ -1323,6 +1344,13 @@ def retry_pending_group_assignments() -> Any:
 def delete_config_status() -> Any:
     auth = PassboltApiAuthService()
     payload = auth.config_status()
+    _save_live_log(
+        "delete",
+        "info" if payload.get("configured") else "warning",
+        payload.get("message") or "delete config status",
+        event_code="delete.config.status",
+        payload=payload,
+    )
     return jsonify(payload)
 
 

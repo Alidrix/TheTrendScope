@@ -467,11 +467,24 @@ async function refreshDeleteConfigStatus() {
   if (!deleteConfigStatus) return true;
   try {
     const payload = await apiGet('/delete-config-status');
+    const checks = payload?.checks || {};
+    const checksInline = [
+      `base_url=${checks.base_url ? 'ok' : 'ko'}`,
+      `auth_mode=${checks.auth_mode ? 'ok' : 'ko'}`,
+      `user_id=${checks.user_id ? 'ok' : 'ko'}`,
+      `private_key_path=${checks.private_key_path ? 'ok' : 'ko'}`,
+      `private_key_exists=${checks.private_key_exists ? 'ok' : 'ko'}`,
+      `passphrase=${checks.passphrase ? 'ok' : 'ko'}`,
+      `mfa_provider=${checks.mfa_provider ? 'ok' : 'ko'}`,
+      `totp_secret=${checks.totp_secret ? 'ok' : 'ko'}`
+    ].join(', ');
+
     if (payload?.configured) {
-      deleteConfigStatus.textContent = 'API delete configurée: JWT + ' + (payload.totp_configured ? 'MFA TOTP' : 'sans MFA TOTP');
+      deleteConfigStatus.textContent = `API delete configurée. ${payload?.message || ''}`.trim();
       return true;
     }
-    deleteConfigStatus.textContent = `API delete NON configurée (base_url=${payload?.base_url_present ? 'ok' : 'ko'}, user_id=${payload?.user_id_present ? 'ok' : 'ko'}, key=${payload?.private_key_exists ? 'ok' : 'ko'}, totp=${payload?.totp_configured ? 'ok' : 'ko'})`;
+
+    deleteConfigStatus.textContent = `API delete NON configurée. ${payload?.message || ''} (${checksInline})`;
     return false;
   } catch (error) {
     deleteConfigStatus.textContent = `Impossible de vérifier la config delete API: ${error.message || String(error)}`;
@@ -570,6 +583,7 @@ async function runDelete(previewOnly = false) {
         const event = JSON.parse(trimmed);
         if (event.type === 'log') appendLog('INFO', event.message);
         if (event.type === 'stderr') appendLog('ERR', event.message);
+        if (event.type === 'stdout') appendLog('OUT', event.message);
         if (event.type === 'progress') {
           const payload = event.payload || {};
           setProgress(payload.percent || 0, payload.stage || 'preview');

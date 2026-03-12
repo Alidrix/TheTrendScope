@@ -234,8 +234,6 @@ def get_deletable_users_for_batch(batch_uuid: str) -> list[dict[str, Any]]:
             WHERE batch_uuid = ?
               AND created_by_tool = 1
               AND deletable_candidate = 1
-              AND lower(COALESCE(actual_role, requested_role, '')) != 'admin'
-              AND COALESCE(last_known_activation_state, 'pending') IN ('pending', 'unknown', '')
             ORDER BY id ASC
             """,
             (batch_uuid,),
