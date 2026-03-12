@@ -15,6 +15,7 @@
       <nav class="menu">
         <a class="menu-item active" href="#" data-view="importView">Import CSV</a>
         <a class="menu-item" href="#" data-view="usersView">Utilisateurs</a>
+        <a class="menu-item" href="#" data-view="historyView">Historique</a>
         <a class="menu-item" href="#" data-view="logsView">Logs</a>
       </nav>
     </aside>
@@ -69,6 +70,46 @@
             <tbody id="usersRows"></tbody>
           </table>
           <p id="usersEmpty" class="muted">Aucun import exécuté pour le moment.</p>
+        </section>
+      </section>
+
+      <section id="historyView" class="view-section">
+        <section class="card">
+          <h3>Dernier import</h3>
+          <ul id="lastImportSummary" class="summary-list"></ul>
+        </section>
+
+        <section class="card">
+          <h3>Historique et base locale</h3>
+          <div id="dbSummary" class="stats-grid"></div>
+        </section>
+
+        <section class="card">
+          <h3>Lots d'import</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>batch_uuid</th><th>filename</th><th>created_at</th><th>total_rows</th>
+                <th>success_count</th><th>error_count</th><th>status</th><th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="batchesRows"></tbody>
+          </table>
+          <p id="batchesEmpty" class="muted">Aucun batch enregistré dans la base locale.</p>
+        </section>
+
+        <section class="card">
+          <h3>Détail batch sélectionné</h3>
+          <p id="selectedBatchTitle" class="muted">Sélectionnez un batch pour afficher les utilisateurs.</p>
+          <table>
+            <thead>
+              <tr>
+                <th>email</th><th>firstname</th><th>lastname</th><th>requested_role</th><th>import_status</th>
+                <th>activation_link</th><th>last_known_activation_state</th><th>deletable_candidate</th><th>created_by_tool</th>
+              </tr>
+            </thead>
+            <tbody id="batchUsersRows"></tbody>
+          </table>
         </section>
       </section>
 

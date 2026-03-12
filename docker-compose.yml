@@ -6,6 +6,7 @@ services:
       - "${IMPORTER_API_PORT:-9090}:9090"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/app/data
     environment:
       - PASSBOLT_CONTAINER=${PASSBOLT_CONTAINER:-passbolt-passbolt-1}
       - PASSBOLT_CLI_PATH=${PASSBOLT_CLI_PATH:-/usr/share/php/passbolt/bin/cake}

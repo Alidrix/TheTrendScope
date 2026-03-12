@@ -14,6 +14,12 @@ const toast = document.getElementById('toast');
 const logsBox = document.getElementById('logs');
 const menuItems = document.querySelectorAll('.menu-item');
 const viewSections = document.querySelectorAll('.view-section');
+const dbSummary = document.getElementById('dbSummary');
+const batchesRows = document.getElementById('batchesRows');
+const batchesEmpty = document.getElementById('batchesEmpty');
+const selectedBatchTitle = document.getElementById('selectedBatchTitle');
+const batchUsersRows = document.getElementById('batchUsersRows');
+const lastImportSummary = document.getElementById('lastImportSummary');
 
 let latestResults = [];
 
@@ -31,6 +37,9 @@ function showToast(message, type = 'info') {
 function switchView(viewId) {
   viewSections.forEach((section) => section.classList.toggle('active-view', section.id === viewId));
   menuItems.forEach((item) => item.classList.toggle('active', item.dataset.view === viewId));
+  if (viewId === 'historyView') {
+    refreshHistoryData();
+  }
 }
 
 menuItems.forEach((item) => {
@@ -77,15 +86,16 @@ function setProgress(percent, stage = 'preview') {
 }
 
 function statusBadge(status) {
-  if (status === 'success') return '<span class="badge badge-success">succès</span>';
+  if (status === 'success' || status === 'completed' || status === 'created' || status === 'pending_activation') return '<span class="badge badge-success">succès</span>';
   if (status === 'partial' || status === 'deferred') return '<span class="badge badge-warning">partiel/différé</span>';
   if (status === 'error' || status === 'failed') return '<span class="badge badge-error">erreur</span>';
+  if (status === 'skipped') return '<span class="badge badge-info">non complet</span>';
   if (status === 'rolled_back' || status === 'rollback_required_manual') return '<span class="badge badge-info">rollback</span>';
   return `<span class="badge badge-info">${status || 'n/a'}</span>`;
 }
 
 function escapeHtml(text) {
-  return (text || '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
+  return (text || '').toString().replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 
 function renderUsersPanel() {
@@ -137,10 +147,141 @@ function renderImportResults(payload) {
     <li>Groupes assignés: <strong>${sum.groups_assigned || 0}</strong></li>
     <li>Assignations différées: <strong>${sum.groups_deferred || 0}</strong></li>
     <li>Erreurs: <strong>${sum.errors || 0}</strong></li>
+    <li>Batch UUID: <strong>${escapeHtml(payload.batch_uuid || '-')}</strong></li>
   `;
 
   renderUsersPanel();
   summary.textContent = `Import ${payload.status} — ${payload.success}/${payload.total}`;
+}
+
+function formatDate(value) {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleString();
+}
+
+async function apiGet(path) {
+  const response = await fetch(path);
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload?.error || `HTTP ${response.status}`);
+  return payload;
+}
+
+function renderDbSummary(summaryPayload) {
+  const last = summaryPayload?.last_batch;
+  dbSummary.innerHTML = `
+    <div class="stat-item"><span>Total batches</span><strong>${summaryPayload?.batches_count || 0}</strong></div>
+    <div class="stat-item"><span>Total users tracked</span><strong>${summaryPayload?.tracked_users_count || 0}</strong></div>
+    <div class="stat-item"><span>Users créés par l'outil</span><strong>${summaryPayload?.tool_created_count || 0}</strong></div>
+    <div class="stat-item"><span>Deletable candidates</span><strong>${summaryPayload?.deletable_candidates_count || 0}</strong></div>
+    <div class="stat-item stat-wide"><span>Last batch</span><strong>${escapeHtml(last?.batch_uuid || 'Aucun')}</strong></div>
+  `;
+}
+
+function renderLastImportBlock(latestBatch, users = []) {
+  const pendingCount = users.filter((user) => user.import_status === 'pending_activation').length;
+  const deletableCount = users.filter((user) => Number(user.deletable_candidate) === 1).length;
+  if (!latestBatch) {
+    lastImportSummary.innerHTML = '<li>Aucun import enregistré.</li>';
+    return;
+  }
+  lastImportSummary.innerHTML = `
+    <li>Fichier CSV: <strong>${escapeHtml(latestBatch.filename)}</strong></li>
+    <li>Date: <strong>${formatDate(latestBatch.created_at)}</strong></li>
+    <li>Utilisateurs créés: <strong>${latestBatch.success_count || 0}</strong></li>
+    <li>Erreurs: <strong>${latestBatch.error_count || 0}</strong></li>
+    <li>Comptes pending: <strong>${pendingCount}</strong></li>
+    <li>Comptes potentiellement supprimables: <strong>${deletableCount}</strong></li>
+  `;
+}
+
+function renderBatches(items) {
+  batchesRows.innerHTML = '';
+  if (!items.length) {
+    batchesEmpty.style.display = 'block';
+    return;
+  }
+  batchesEmpty.style.display = 'block';
+  batchesEmpty.textContent = 'Cliquez sur "Voir" pour ouvrir le détail d\'un batch.';
+  items.forEach((item) => {
+    batchesRows.insertAdjacentHTML('beforeend', `
+      <tr>
+        <td>${escapeHtml(item.batch_uuid)}</td>
+        <td>${escapeHtml(item.filename)}</td>
+        <td>${escapeHtml(formatDate(item.created_at))}</td>
+        <td>${item.total_rows}</td>
+        <td>${item.success_count}</td>
+        <td>${item.error_count}</td>
+        <td>${statusBadge(item.status)}</td>
+        <td><button type="button" class="btn-primary btn-small" data-batch="${escapeHtml(item.batch_uuid)}">Voir</button></td>
+      </tr>
+    `);
+  });
+
+  document.querySelectorAll('[data-batch]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await loadBatchDetails(button.dataset.batch);
+    });
+  });
+}
+
+function renderBatchUsers(batchUuid, users) {
+  selectedBatchTitle.textContent = `Batch sélectionné: ${batchUuid}`;
+  batchUsersRows.innerHTML = '';
+  users.forEach((user) => {
+    const link = user.activation_link ? `<a href="${escapeHtml(user.activation_link)}" target="_blank" rel="noopener noreferrer">ouvrir</a>` : '-';
+    batchUsersRows.insertAdjacentHTML('beforeend', `
+      <tr>
+        <td>${escapeHtml(user.email)}</td>
+        <td>${escapeHtml(user.firstname || '')}</td>
+        <td>${escapeHtml(user.lastname || '')}</td>
+        <td>${escapeHtml(user.requested_role || '')}</td>
+        <td>${statusBadge(user.import_status)}</td>
+        <td>${link}</td>
+        <td>${escapeHtml(user.last_known_activation_state || '')}</td>
+        <td>${Number(user.deletable_candidate) === 1 ? '1' : '0'}</td>
+        <td>${Number(user.created_by_tool) === 1 ? '1' : '0'}</td>
+      </tr>
+    `);
+  });
+}
+
+async function loadBatchDetails(batchUuid) {
+  try {
+    const payload = await apiGet(`/batches/${encodeURIComponent(batchUuid)}`);
+    renderBatchUsers(batchUuid, payload.users || []);
+  } catch (error) {
+    appendLog('ERR', `Chargement batch impossible: ${error.message || String(error)}`);
+    showToast('Erreur chargement batch', 'error');
+  }
+}
+
+async function refreshHistoryData() {
+  try {
+    const [summaryPayload, batchesPayload] = await Promise.all([
+      apiGet('/db/summary'),
+      apiGet('/batches')
+    ]);
+
+    renderDbSummary(summaryPayload);
+    const items = batchesPayload?.items || [];
+    renderBatches(items);
+
+    const latest = summaryPayload?.last_batch;
+    if (latest?.batch_uuid) {
+      const latestDetails = await apiGet(`/batches/${encodeURIComponent(latest.batch_uuid)}`);
+      renderLastImportBlock(latest, latestDetails.users || []);
+      renderBatchUsers(latest.batch_uuid, latestDetails.users || []);
+    } else {
+      renderLastImportBlock(null, []);
+      selectedBatchTitle.textContent = 'Sélectionnez un batch pour afficher les utilisateurs.';
+      batchUsersRows.innerHTML = '';
+    }
+  } catch (error) {
+    appendLog('ERR', `Historique indisponible: ${error.message || String(error)}`);
+    showToast('Impossible de charger l’historique', 'warning');
+  }
 }
 
 async function deleteLastImportedUsers() {
@@ -213,8 +354,9 @@ uploadBtn.addEventListener('click', async () => {
         if (event.type === 'final') {
           setProgress(100, 'done');
           renderImportResults(event.payload);
-          appendLog('INFO', 'Import stream terminé', { status: event.payload?.status, success: event.payload?.success, total: event.payload?.total });
+          appendLog('INFO', 'Import stream terminé', { status: event.payload?.status, success: event.payload?.success, total: event.payload?.total, batch_uuid: event.payload?.batch_uuid });
           showToast('Import terminé', 'success');
+          refreshHistoryData();
         }
       }
     }
@@ -228,3 +370,5 @@ uploadBtn.addEventListener('click', async () => {
     uploadBtn.disabled = false;
   }
 });
+
+refreshHistoryData();

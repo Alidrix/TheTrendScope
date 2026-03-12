@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import Lock
 from typing import Any
@@ -12,7 +13,22 @@ from typing import Any
 import docker
 from flask import Flask, Response, jsonify, request, stream_with_context
 
+from db import (
+    create_import_batch,
+    finalize_import_batch,
+    get_batch,
+    get_batch_users,
+    get_db_summary,
+    get_deletable_users_for_batch,
+    get_last_import_batch,
+    init_db,
+    list_import_batches,
+    save_imported_user,
+)
+
 app = Flask(__name__)
+init_db()
+
 
 PASSBOLT_CONTAINER = os.getenv("PASSBOLT_CONTAINER", "passbolt-passbolt-1")
 PASSBOLT_CLI_PATH = os.getenv("PASSBOLT_CLI_PATH", "/usr/share/php/passbolt/bin/cake")
@@ -396,6 +412,16 @@ def _set_last_imported_users(users: list[str]) -> None:
         LAST_IMPORTED_USERS.clear()
         LAST_IMPORTED_USERS.extend(users)
 
+
+def _resolve_batch_status(import_status: str, success_count: int, error_count: int) -> str:
+    if import_status == "success" and error_count == 0:
+        return "completed"
+    if success_count > 0 and error_count > 0:
+        return "partial"
+    if success_count > 0 and error_count == 0:
+        return "completed"
+    return "failed"
+
 def rollback_batch(created_users: list[str], container: str, cli_path: str) -> dict[str, Any]:
     if not created_users:
         return {"status": "no-op", "rolled_back": [], "manual_required": False}
@@ -427,10 +453,19 @@ def rollback_batch(created_users: list[str], container: str, cli_path: str) -> d
     }
 
 
-def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rollback_on_error: bool, emit: Any = None) -> dict[str, Any]:
+def _process_rows(
+    rows: list[dict[str, Any]],
+    container: str,
+    cli_path: str,
+    rollback_on_error: bool,
+    source_filename: str,
+    emit: Any = None,
+) -> dict[str, Any]:
     started = time.time()
     group_service = GroupService(container, cli_path)
     preview = preview_rows(rows)
+    batch_uuid = str(uuid.uuid4())
+    create_import_batch(batch_uuid=batch_uuid, filename=source_filename, total_rows=len(rows), status="running")
 
     valid_rows = [row for row in preview["rows"] if row["valid"]]
     total_valid = len(valid_rows)
@@ -470,6 +505,17 @@ def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rol
             break
 
         if not row["valid"]:
+            save_imported_user(
+                batch_uuid=batch_uuid,
+                email=row.get("email", ""),
+                firstname=row.get("firstname", ""),
+                lastname=row.get("lastname", ""),
+                requested_role=row.get("role", ""),
+                import_status="skipped",
+                created_by_tool=0,
+                last_known_activation_state="unknown",
+                deletable_candidate=0,
+            )
             results.append({
                 "email": row.get("email", ""),
                 "user_create_status": "error",
@@ -502,8 +548,10 @@ def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rol
 
         if user_result["returncode"] == 0:
             created_users.append(email)
+            user_import_status = "pending_activation"
             _emit_structured(emit, "info", "user.create.success", "User created", row=index, email=email)
         else:
+            user_import_status = "error"
             user_payload["errors"].append(user_result.get("stderr") or "user creation failed")
             _emit_structured(emit, "error", "user.create.failed", "User creation failed", row=index, email=email, stderr=user_result.get("stderr", ""))
             if _critical_error(user_result):
@@ -558,6 +606,20 @@ def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rol
         else:
             user_payload["group_assignment_status"] = "not-created"
 
+        save_imported_user(
+            batch_uuid=batch_uuid,
+            email=email,
+            firstname=row.get("firstname", ""),
+            lastname=row.get("lastname", ""),
+            requested_role=row.get("role", ""),
+            import_status=user_import_status,
+            activation_link=user_payload.get("created_user_activation_link"),
+            created_by_tool=1 if user_result["returncode"] == 0 else 0,
+            actual_role=row.get("role", ""),
+            last_known_activation_state="pending" if user_result["returncode"] == 0 else "unknown",
+            deletable_candidate=1 if user_result["returncode"] == 0 and row.get("role", "").lower() != "admin" else 0,
+        )
+
         results.append(user_payload)
 
         if rollback_on_error and critical_error:
@@ -582,8 +644,11 @@ def _process_rows(rows: list[dict[str, Any]], container: str, cli_path: str, rol
         emit({"type": "progress", "payload": {"current": len(results), "total": max(len(rows), 1), "percent": 100, "stage": "done"}})
 
     _emit_structured(emit, "info", "import.done", "Import batch finished", status=final_status, users_created=len(created_users), errors=errors_count)
+    batch_status = _resolve_batch_status(final_status, len(created_users), errors_count)
+    finalize_import_batch(batch_uuid=batch_uuid, success_count=len(created_users), error_count=errors_count, status=batch_status)
 
     return {
+        "batch_uuid": batch_uuid,
         "status": final_status,
         "total": len(results),
         "success": sum(1 for item in results if item.get("user_create_status") == "success"),
@@ -641,7 +706,9 @@ def preview_csv() -> Any:
 
 @app.route("/import", methods=["POST"])
 def import_csv() -> Any:
-    rows, error = parse_csv_rows(request.files.get("file"))
+    file_storage = request.files.get("file")
+    source_filename = (file_storage.filename if file_storage else "unknown.csv") or "unknown.csv"
+    rows, error = parse_csv_rows(file_storage)
     if error:
         return error
 
@@ -650,14 +717,16 @@ def import_csv() -> Any:
     container = diagnostics.get("resolved_container", PASSBOLT_CONTAINER)
     cli_path = diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH)
 
-    payload = _process_rows(rows, container, cli_path, rollback_on_error=rollback_on_error)
+    payload = _process_rows(rows, container, cli_path, rollback_on_error=rollback_on_error, source_filename=source_filename)
     payload["diagnostics"] = diagnostics
     return jsonify(payload)
 
 
 @app.route("/import-stream", methods=["POST"])
 def import_csv_stream() -> Any:
-    rows, error = parse_csv_rows(request.files.get("file"))
+    file_storage = request.files.get("file")
+    source_filename = (file_storage.filename if file_storage else "unknown.csv") or "unknown.csv"
+    rows, error = parse_csv_rows(file_storage)
     if error:
         return error
 
@@ -676,7 +745,14 @@ def import_csv_stream() -> Any:
         def emit(event: dict[str, Any]) -> None:
             events.append(event)
 
-        payload = _process_rows(rows, container, cli_path, rollback_on_error=rollback_on_error, emit=emit)
+        payload = _process_rows(
+            rows,
+            container,
+            cli_path,
+            rollback_on_error=rollback_on_error,
+            source_filename=source_filename,
+            emit=emit,
+        )
 
         for event in events:
             yield json.dumps(event, ensure_ascii=False) + "\n"
@@ -750,6 +826,41 @@ def delete_last_import_users() -> Any:
 
     status = "success" if not errors else "partial"
     return jsonify({"status": status, "deleted": deleted, "errors": errors, "total_requested": len(target_users)})
+
+
+@app.route("/batches", methods=["GET"])
+def batches() -> Any:
+    return jsonify({"items": list_import_batches()})
+
+
+@app.route("/batches/latest", methods=["GET"])
+def latest_batch() -> Any:
+    batch = get_last_import_batch()
+    if not batch:
+        return jsonify({"error": "no batch found"}), 404
+    return jsonify(batch)
+
+
+@app.route("/batches/<batch_uuid>", methods=["GET"])
+def batch_details(batch_uuid: str) -> Any:
+    batch = get_batch(batch_uuid)
+    if not batch:
+        return jsonify({"error": "batch not found"}), 404
+    return jsonify({"batch": batch, "users": get_batch_users(batch_uuid)})
+
+
+@app.route("/batches/<batch_uuid>/deletable-users", methods=["GET"])
+def batch_deletable_users(batch_uuid: str) -> Any:
+    batch = get_batch(batch_uuid)
+    if not batch:
+        return jsonify({"error": "batch not found"}), 404
+    users = get_deletable_users_for_batch(batch_uuid)
+    return jsonify({"batch_uuid": batch_uuid, "total": len(users), "items": users})
+
+
+@app.route("/db/summary", methods=["GET"])
+def db_summary() -> Any:
+    return jsonify(get_db_summary())
 
 
 @app.errorhandler(Exception)

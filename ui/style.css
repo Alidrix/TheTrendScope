@@ -87,3 +87,10 @@ tbody tr:hover { background: var(--bg-page); }
 .toast-warning { background: var(--warning-soft); border-color: var(--warning); }
 .toast-error { background: var(--danger-soft); border-color: var(--danger); }
 .toast-info { background: var(--info-soft); border-color: var(--info); }
+
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 8px; }
+.stat-item { border: 1px solid var(--border-soft); border-radius: 8px; background: var(--bg-soft); padding: 10px; display: flex; flex-direction: column; gap: 4px; }
+.stat-item span { color: var(--text-secondary); font-size: 12px; }
+.stat-item strong { color: var(--text-main); }
+.stat-wide { grid-column: 1 / -1; }
+.btn-small { padding: 6px 9px; font-size: 12px; }
