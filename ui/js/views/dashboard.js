@@ -6,6 +6,11 @@ import { kpiCard } from '../components/kpi-card.js';
 import { emptyState } from '../components/empty-state.js';
 import { statusBadge, statusChip } from '../components/status-chip.js';
 
+function renderHealthCard(item) {
+  const ok = Boolean(item?.ok);
+  return `<div class="health-card"><p class="muted text-ellipsis">${escapeHtml(item?.label || '-')}</p><div>${ok ? statusChip('operational', 'Opérationnel') : statusChip('check', 'À vérifier')}</div><p class="muted text-ellipsis">${escapeHtml(item?.detail || '-')}</p></div>`;
+}
+
 export function renderDashboardView() {
   $('dashboardView').innerHTML = `
     ${pageHeader('Dashboard', 'Supervision opérationnelle des imports, suppressions et alertes.', '<div class="dashboard-header-actions"><span id="dashboardLastSync" class="muted">Dernière synchro: --</span><button id="dashboardRefresh" class="btn btn-secondary">↻</button></div>', 'dashboard-header')}
@@ -67,7 +72,7 @@ export async function refreshDashboard() {
       { label: 'Base locale', ok: true, detail: `${dbSummary?.batches_count || 0} batch(es)` },
       { label: 'Passbolt / CLI', ok: Boolean(health?.resolved_cli_path), detail: health?.resolved_cli_path || 'Chemin inconnu' }
     ];
-    $('healthGrid').innerHTML = healthCards.map(healthCard).join('');
+    $('healthGrid').innerHTML = healthCards.map((item) => renderHealthCard(item)).join('');
     $('dashboardLastSync').textContent = `Dernière synchro: ${new Date().toLocaleTimeString('fr-FR')}`;
 
     const today = new Date().toDateString();
