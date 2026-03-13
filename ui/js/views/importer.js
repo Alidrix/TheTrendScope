@@ -1,21 +1,29 @@
-import { STAGES, state } from '../state.js';
+import { state } from '../state.js';
 import { $, escapeHtml, setToast, textCell } from '../utils.js';
 import { apiGet } from '../api.js';
 import { pageHeader } from '../components/page-header.js';
 import { kpiCard } from '../components/kpi-card.js';
-import { renderStepper } from '../components/progress-stepper.js';
 import { appendConsoleLine } from '../components/console-panel.js';
 import { statusBadge } from '../components/status-chip.js';
 
 export function renderImporterView() {
-  $('importerView').innerHTML = `${pageHeader('Importer', 'Workflow guidé pour un import CSV robuste et traçable.')}<div class="grid-two"><div class="card"><div class="section-header"><h3>Dépôt CSV</h3><p>1 fichier = 1 batch</p></div><div class="drop-zone"><input id="importFile" type="file" accept=".csv"/></div><div class="form-grid mt-3"><div><label>Nom de lot (optionnel)</label><input id="importBatchLabel" placeholder="Ex: RH-Mars"/></div><div><label><input id="importDryRun" type="checkbox" checked/> Prévalidation uniquement</label></div></div><div class="action-bar mt-3"><button class="btn btn-primary" id="importStartBtn">Démarrer l'import</button></div></div><div class="card"><div class="section-header"><h3>Progression live</h3></div><div class="stepper" id="importStepper"></div><div class="progress-track mt-3"><div class="progress-bar" id="importProgressBar"></div></div><p id="simpleRunSummary" class="muted mt-3 text-break">En attente d'exécution.</p><details class="mt-3"><summary>Console technique</summary><pre class="console" id="importConsole"></pre></details></div></div><div class="card"><div class="section-header"><h3>Résultats finaux</h3></div><div id="importSummaryCards" class="grid-kpi"></div><div class="table-wrap mt-3"><table><thead><tr><th>Email</th><th>Statut</th><th>Groupes demandés</th><th>Détails</th></tr></thead><tbody id="importResultsRows"></tbody></table></div></div>`;
-  renderStepper('importStepper', STAGES, 'preview');
+  $('importerView').innerHTML = `${pageHeader('Importer', 'Workflow guidé pour un import CSV robuste et traçable.')}<div class="grid-two"><div class="card"><div class="section-header"><h3>Dépôt CSV</h3><p>1 fichier = 1 batch</p></div><div class="drop-zone"><input id="importFile" type="file" accept=".csv"/></div><div class="form-grid mt-3"><div><label>Nom de lot (optionnel)</label><input id="importBatchLabel" placeholder="Ex: RH-Mars"/></div><div><label>Prévalidation uniquement</label><label id="importDryRunToggle" class="toggle-control"><input id="importDryRun" type="checkbox" checked/><span class="toggle-slider"></span><span class="toggle-text">Activée</span></label></div></div><div class="action-bar mt-3"><button class="btn btn-primary" id="importStartBtn">Démarrer l'import</button></div></div><div class="card"><div class="section-header"><h3>Progression live</h3></div><div id="importProgressWrap" class="progress-track mt-3"><div class="progress-bar" id="importProgressBar"></div></div><p class="muted mt-3">Console technique</p><pre class="console" id="importConsole"></pre></div></div><div class="card"><div class="section-header"><h3>Résultats finaux</h3></div><div id="importSummaryCards" class="grid-kpi compact-kpi"></div><div class="table-wrap mt-3"><table><thead><tr><th>Email</th><th>Statut</th><th>Groupes demandés</th><th>Détails</th></tr></thead><tbody id="importResultsRows"></tbody></table></div></div>`;
+  updateDryRunToggle();
+  $('importDryRun').addEventListener('change', updateDryRunToggle);
   $('importStartBtn').addEventListener('click', runImportFlow);
 }
 
 function setImportProgress(percent, stage) {
-  $('importProgressBar').style.width = `${Math.max(0, Math.min(100, percent || 0))}%`;
-  $('simpleRunSummary').textContent = `Étape: ${stage || 'prévalidation'} — ${percent || 0}%`;
+  const safePercent = Math.max(0, Math.min(100, percent || 0));
+  $('importProgressBar').style.width = `${safePercent}%`;
+  $('importProgressWrap').style.display = safePercent >= 100 ? 'none' : 'block';
+}
+
+function updateDryRunToggle() {
+  const checked = $('importDryRun')?.checked;
+  $('importDryRunToggle')?.classList.toggle('off', !checked);
+  const text = $('importDryRunToggle')?.querySelector('.toggle-text');
+  if (text) text.textContent = checked ? 'Activée' : 'Désactivée';
 }
 
 async function runImportFlow() {
@@ -23,7 +31,7 @@ async function runImportFlow() {
   if (!f) return setToast('Sélectionnez un CSV.');
   $('importStartBtn').disabled = true;
   $('importConsole').textContent = '';
-  renderStepper('importStepper', STAGES, 'preview');
+  $('importProgressWrap').style.display = 'block';
   setImportProgress(0, 'prévalidation');
   try {
     await apiGet('/api/health');
@@ -50,7 +58,6 @@ async function runImportFlow() {
         if (['log', 'stderr', 'stdout'].includes(event.type)) appendConsoleLine('importConsole', `${event.type.toUpperCase()} | ${event.message}`);
         if (event.type === 'progress') {
           const p = event.payload || {};
-          renderStepper('importStepper', STAGES, p.stage || 'preview');
           setImportProgress(p.percent || 0, p.stage || 'preview');
         }
         if (event.type === 'final') renderImportFinal(event.payload || {});
