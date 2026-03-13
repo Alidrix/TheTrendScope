@@ -1,7 +1,6 @@
 import { apiGet } from '../api.js';
 import { state } from '../state.js';
 import { $, escapeHtml, formatDate, setToast } from '../utils.js';
-import { kpiCard } from '../components/kpi-card.js';
 import { emptyState } from '../components/empty-state.js';
 import { statusBadge, statusChip } from '../components/status-chip.js';
 
@@ -13,7 +12,6 @@ function renderHealthCard(item) {
 export function renderDashboardView() {
   $('dashboardView').innerHTML = `
     <div class="grid-health" id="healthGrid"></div>
-    <div class="grid-kpi" id="kpiGrid"></div>
 
     <div class="grid-main compact-main">
       <div class="card">
@@ -70,17 +68,6 @@ export async function refreshDashboard() {
       { label: 'Passbolt / CLI', ok: Boolean(health?.resolved_cli_path), detail: health?.resolved_cli_path || 'Chemin inconnu' }
     ];
     $('healthGrid').innerHTML = healthCards.map((item) => renderHealthCard(item)).join('');
-
-    const today = new Date().toDateString();
-    const kpis = [
-      ['Imports j.', state.batches.filter((b) => new Date(b.created_at).toDateString() === today).length],
-      ['Utilisateurs', latest?.success_count || 0],
-      ['Groupes', latest?.group_assignments || 0],
-      ['Erreurs 24h', logsSummary?.by_level?.error || 0],
-      ['Batches', dbSummary?.batches_count || 0],
-      ['Supprimables', dbSummary?.deletable_candidates_count || 0]
-    ];
-    $('kpiGrid').innerHTML = kpis.map(([label, value]) => kpiCard(label, value)).join('');
 
     $('lastImportBlock').innerHTML = latest ? `
       <p class="dashboard-title text-ellipsis"><strong>${escapeHtml(latest.filename || '-')}</strong></p>

@@ -79,7 +79,3 @@ th { position: sticky; top: 0; background: var(--color-surface-2); z-index: 1; }
 #deleteRows td { vertical-align: middle; }
 @media (max-width: 1200px) { .deletions-top-row { grid-template-columns: 1fr; align-items: stretch; } .deletions-actions { justify-content: flex-start; } .section-header { flex-direction: column; align-items: flex-start; } .section-header > .grid-kpi { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
-
-.tab-btn { font-size: 13px; }
-.logs-table th, .logs-table td { font-size: 12px; line-height: 1.35; }
-.logs-table .status-chip { font-size: 11px; }
