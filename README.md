@@ -19,6 +19,8 @@ sudo docker compose up -d
 - `importer-ui` : interface web d'import CSV sur `http://<host>:9091` (ou `${IMPORTER_UI_PORT}`)
 - `importer-api` : API Flask sur `http://<host>:9090` (ou `${IMPORTER_API_PORT}`)
 
+> Note architecture UI: le front réellement servi par Docker est `ui/` (monté dans Nginx `importer-ui`). Le dossier `frontend/` est historique et non utilisé dans le flux principal.
+
 ## Variables d'environnement
 
 - `PASSBOLT_CONTAINER` (défaut: `passbolt-passbolt-1`) : nom du conteneur Passbolt cible.
