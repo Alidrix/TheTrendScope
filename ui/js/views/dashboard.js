@@ -2,10 +2,9 @@ import { apiGet } from '../api.js';
 import { state } from '../state.js';
 import { $, escapeHtml, formatDate, setToast } from '../utils.js';
 import { pageHeader } from '../components/page-header.js';
-import { healthCard } from '../components/health-card.js';
 import { kpiCard } from '../components/kpi-card.js';
 import { emptyState } from '../components/empty-state.js';
-import { statusBadge } from '../components/status-chip.js';
+import { statusBadge, statusChip } from '../components/status-chip.js';
 
 export function renderDashboardView() {
   $('dashboardView').innerHTML = `
