@@ -4,3 +4,4 @@
 .mb-3 { margin-bottom: var(--space-3); }
 .mt-3 { margin-top: var(--space-3); }
 .w-100 { width: 100%; }
+.overflow-hidden { overflow: hidden; }

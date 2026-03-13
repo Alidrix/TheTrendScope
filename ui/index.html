@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Passbolt</title>
+  <title>Passbolt Cockpit</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
   <link rel="stylesheet" href="/style.css" />
 </head>
@@ -20,6 +20,9 @@
         <a class="menu-item" href="#" data-view="historyView">Historique</a>
         <a class="menu-item" href="#" data-view="logsAuditView">Logs & audit</a>
       </nav>
+      <div class="sidebar-footer">
+        <button id="themeToggle" class="btn btn-secondary w-100" type="button">Mode clair</button>
+      </div>
     </aside>
 
     <main class="main-content">
@@ -31,7 +34,7 @@
     </main>
   </div>
 
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="/js/app.js"></script>
 </body>
 </html>

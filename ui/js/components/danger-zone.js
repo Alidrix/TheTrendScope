@@ -1,0 +1,1 @@
+export const dangerZone = (title, description, actionHtml) => `<div class="card danger-zone"><div class="section-header"><h3>${title}</h3></div><p class="muted line-clamp-2 text-break">${description}</p>${actionHtml}</div>`;
