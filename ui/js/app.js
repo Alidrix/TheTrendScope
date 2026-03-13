@@ -13,6 +13,11 @@ const refreshByView = {
   logsAuditView: refreshLogs
 };
 
+function refreshActiveView() {
+  const runner = refreshByView[state.view];
+  return runner ? runner() : Promise.resolve();
+}
+
 function switchView(viewId) {
   state.view = viewId;
   document.querySelectorAll('.menu-item').forEach((a) => a.classList.toggle('active', a.dataset.view === viewId));
@@ -50,7 +55,11 @@ function init() {
     e.preventDefault();
     switchView(item.dataset.view);
   }));
+  $('globalRefresh')?.addEventListener('click', () => {
+    refreshActiveView().catch((e) => setToast(e.message));
+  });
   Promise.all([refreshDashboard(), refreshDeleteConfig(), refreshHistory(), refreshLogs()]).catch((e) => setToast(e.message));
 }
+
 
 init();

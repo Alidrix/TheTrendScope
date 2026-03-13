@@ -1,22 +1,55 @@
 import { apiGet } from '../api.js';
 import { state } from '../state.js';
 import { $, escapeHtml, setToast, textCell } from '../utils.js';
-import { pageHeader } from '../components/page-header.js';
 import { dangerZone } from '../components/danger-zone.js';
 import { emptyState } from '../components/empty-state.js';
 import { kpiCard } from '../components/kpi-card.js';
 import { statusBadge, statusChip } from '../components/status-chip.js';
 
 export function renderDeletionsView() {
-  $('deletionsView').innerHTML = `${pageHeader('Suppressions', 'Zone sensible : suppression par batch avec garde-fous visuels.')}<div class="grid-two"><div class="card"><div class="section-header"><h3>Préparation</h3></div><p id="deleteConfigStatus" class="muted">Vérification...</p><div class="form-grid"><div><label>Batch cible</label><select id="deleteBatchSelect"></select></div><div><label><input id="deleteDryRunOnly" type="checkbox" checked/> Dry-run uniquement</label></div></div><div class="action-bar mt-3"><button id="deletePreviewBtn" class="btn btn-secondary">Prévisualiser</button></div></div>${dangerZone('Danger zone', 'Cette action est irréversible. Confirmez uniquement après vérification de l\'éligibilité.', '<button id="deleteExecuteBtn" class="btn btn-danger" disabled>Supprimer réellement</button>')}</div><div class="card"><div class="section-header"><h3>Prévisualisation d’éligibilité</h3></div><div id="deleteEligibility" class="grid-kpi"></div></div><div class="card"><div class="section-header"><h3>Retour d’exécution live</h3></div><div class="table-wrap"><table><thead><tr><th>Email</th><th>Batch</th><th>Statut</th><th>Détails</th></tr></thead><tbody id="deleteRows"></tbody></table></div></div>`;
+  $('deletionsView').innerHTML = `
+    <div class="deletions-top-row card compact-bar">
+      <div class="top-item min-w-0">
+        <label>Delete API</label>
+        <div id="deleteConfigStatus" class="muted">Vérification...</div>
+      </div>
+      <div class="top-item min-w-0">
+        <label>Batch</label>
+        <select id="deleteBatchSelect"></select>
+      </div>
+      <div class="top-item min-w-0">
+        <label>Dry-run</label>
+        <label id="importDryRunToggle" class="toggle-control"><input id="deleteDryRunOnly" type="checkbox" checked/><span class="toggle-slider"></span><span class="toggle-text">Activé</span></label>
+      </div>
+      <div class="action-bar deletions-actions">
+        <button id="deletePreviewBtn" class="btn btn-secondary">Prévisualiser</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-header"><h3>Éligibilité</h3><div id="deleteEligibility" class="grid-kpi compact-kpi"></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Email</th><th>Batch</th><th>Statut</th><th>Détails</th></tr></thead><tbody id="deleteRows"></tbody></table></div>
+    </div>
+
+    ${dangerZone('DangerZone', 'Action irréversible. Vérifiez la prévisualisation avant exécution.', '<div class="action-bar"><span class="muted">Confirmation explicite requise</span><button id="deleteExecuteBtn" class="btn btn-danger" disabled>Suppression réelle</button></div>')}
+  `;
+  updateDryRunToggle();
+  $('deleteDryRunOnly').addEventListener('change', updateDryRunToggle);
   $('deletePreviewBtn').addEventListener('click', () => runDeleteStream(true));
   $('deleteExecuteBtn').addEventListener('click', () => runDeleteStream(false));
+}
+
+function updateDryRunToggle() {
+  const checked = $('deleteDryRunOnly')?.checked;
+  $('importDryRunToggle')?.classList.toggle('off', !checked);
+  const text = $('importDryRunToggle')?.querySelector('.toggle-text');
+  if (text) text.textContent = checked ? 'Activé' : 'Désactivé';
 }
 
 export async function refreshDeleteConfig() {
   try {
     const [cfg, batches] = await Promise.all([apiGet('/api/delete-config-status').catch(() => ({})), apiGet('/api/batches').catch(() => ({ items: [] }))]);
-    $('deleteConfigStatus').innerHTML = cfg.configured ? statusChip('operational', 'Delete API configurée') : statusChip('error', 'Delete API non configurée', cfg.message || '');
+    $('deleteConfigStatus').innerHTML = cfg.configured ? statusChip('operational', 'Configurée') : statusChip('error', 'Non configurée', cfg.message || '');
     $('deleteBatchSelect').innerHTML = `<option value="__latest__">Dernier batch</option>${(batches.items || []).map((b) => `<option value="${escapeHtml(b.batch_uuid)}">${escapeHtml(b.batch_uuid)} — ${escapeHtml(b.filename || 'Sans fichier')}</option>`).join('')}`;
   } catch (e) { setToast(`Configuration suppression indisponible: ${e.message}`); }
 }

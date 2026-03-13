@@ -7,26 +7,31 @@
 .brand-block { display: flex; align-items: center; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); min-width: 0; }
 .brand-block img { width: 100%; max-width: 220px; height: 56px; object-fit: contain; display: block; margin: 0 auto; }
 .menu { display: grid; gap: var(--space-2); }
-.main-content { min-width: 0; padding: var(--space-6); display: grid; }
+.main-content { min-width: 0; padding: calc(var(--space-5) + 42px) var(--space-6) var(--space-6); display: grid; position: relative; }
 .view-section { display: none; min-width: 0; }
-.view-section.active-view { display: grid; gap: var(--space-4); align-content: start; }
-.page-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
+.view-section.active-view { display: grid; gap: var(--space-3); align-content: start; }
+.page-header { display: none; }
 .sidebar-footer { margin-top: auto; }
-.theme-toggle {
-  position: fixed;
-  top: 14px;
-  right: 14px;
-  width: 40px;
-  height: 40px;
+.topbar-controls {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-6);
+  display: inline-flex;
+  gap: var(--space-2);
+  z-index: 20;
+}
+.icon-btn {
+  width: 38px;
+  height: 38px;
   border-radius: 999px;
   border: 1px solid var(--color-border);
   background: var(--color-surface-2);
-  font-size: 18px;
+  font-size: 17px;
   cursor: pointer;
-  z-index: 20;
 }
 
 @media (max-width: 1080px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; }
+  .main-content { padding-top: calc(var(--space-5) + 56px); }
 }
