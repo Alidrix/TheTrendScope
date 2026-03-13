@@ -60,3 +60,21 @@ th { position: sticky; top: 0; background: var(--color-surface-2); z-index: 1; }
 @media (max-width: 760px) {
   .grid-health, .grid-kpi, .dashboard-inline-kpis { grid-template-columns: 1fr; }
 }
+
+
+.health-card { display: grid; grid-template-rows: auto auto 1fr; align-items: start; gap: var(--space-2); min-height: 132px; padding: var(--space-3); }
+.health-card h3 { font-size: 15px; margin: 0; }
+.health-card .status-chip { justify-self: start; }
+.health-card .muted { font-size: 13px; }
+.grid-main.compact-main .card { padding: var(--space-4); }
+.dashboard-title { font-size: 17px; }
+.dashboard-alert-line { border-left-width: 1px; padding: 8px 10px; }
+.deletions-top-row { display: grid; grid-template-columns: 1fr 1.2fr auto auto; gap: var(--space-3); align-items: end; }
+.top-item { display: grid; gap: 6px; min-width: 0; }
+.compact-bar { padding: var(--space-3) var(--space-4); }
+.deletions-actions { justify-content: flex-end; }
+.danger-zone { margin-top: var(--space-1); }
+.section-header > .grid-kpi { width: auto; grid-template-columns: repeat(4, minmax(0, 1fr)); flex: 1; }
+.section-header > .grid-kpi .kpi-card { padding: var(--space-2); }
+#deleteRows td { vertical-align: middle; }
+@media (max-width: 1200px) { .deletions-top-row { grid-template-columns: 1fr; align-items: stretch; } .deletions-actions { justify-content: flex-start; } .section-header { flex-direction: column; align-items: flex-start; } .section-header > .grid-kpi { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); } }

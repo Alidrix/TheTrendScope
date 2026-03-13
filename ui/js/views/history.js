@@ -1,12 +1,11 @@
 import { apiGet } from '../api.js';
 import { state } from '../state.js';
 import { $, escapeHtml, formatDate, setToast } from '../utils.js';
-import { pageHeader } from '../components/page-header.js';
 import { emptyState } from '../components/empty-state.js';
 import { statusBadge } from '../components/status-chip.js';
 
 export function renderHistoryView() {
-  $('historyView').innerHTML = `${pageHeader('Historique', 'Vue master-detail : lots à gauche, détails techniques à droite.')}<div class="master-detail"><div class="card"><div class="form-grid"><div><label>Recherche</label><input id="historySearch" placeholder="UUID, fichier..." /></div><div><label>Tri</label><select id="historySort"><option value="date_desc">Date ↓</option><option value="date_asc">Date ↑</option><option value="errors_desc">Erreurs ↓</option></select></div></div><div class="batch-list mt-3" id="batchList"></div></div><div class="card" id="historyDetail"></div></div>`;
+  $('historyView').innerHTML = `<div class="master-detail"><div class="card"><div class="form-grid"><div><label>Recherche</label><input id="historySearch" placeholder="UUID, fichier..." /></div><div><label>Tri</label><select id="historySort"><option value="date_desc">Date ↓</option><option value="date_asc">Date ↑</option><option value="errors_desc">Erreurs ↓</option></select></div></div><div class="batch-list mt-3" id="batchList"></div></div><div class="card" id="historyDetail"></div></div>`;
   $('historySearch').addEventListener('input', () => { state.historySearch = $('historySearch').value.toLowerCase(); renderHistoryList(); });
   $('historySort').addEventListener('change', () => { state.historySort = $('historySort').value; renderHistoryList(); });
 }
