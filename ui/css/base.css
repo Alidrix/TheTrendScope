@@ -1,0 +1,35 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  background: radial-gradient(circle at top right, #1b2744 0%, var(--color-bg) 48%);
+  color: var(--color-text);
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4, p { margin: 0; }
+a { color: inherit; }
+button, input, select { font: inherit; }
+
+.text-ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.text-break {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.line-clamp-2 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.line-clamp-3 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
