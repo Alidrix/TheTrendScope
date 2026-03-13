@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Passbolt CSV Import</title>
+  <title>TheTrendScope | Passbolt Import Center</title>
   <link rel="icon" type="image/svg+xml" href="/assets/logo-mark.svg" />
   <link rel="alternate icon" type="image/svg+xml" href="/assets/favicon.svg" />
   <link rel="mask-icon" href="/assets/logo-full.svg" color="#E08A34" />
@@ -12,175 +12,33 @@
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand-mini">
+      <div class="brand-block">
+        <img src="/assets/passbolt.png" alt="TheTrendScope" onerror="this.onerror=null;this.src='/assets/logo-full.svg';" />
+        <div>
+          <h1>TheTrendScope</h1>
+          <p>Import & supervision Passbolt</p>
+        </div>
       </div>
       <nav class="menu">
-        <a class="menu-item active" href="#" data-view="importView">Import CSV</a>
-        <a class="menu-item" href="#" data-view="usersView">Utilisateurs</a>
+        <a class="menu-item active" href="#" data-view="dashboardView">Dashboard</a>
+        <a class="menu-item" href="#" data-view="importerView">Importer</a>
+        <a class="menu-item" href="#" data-view="deletionsView">Suppressions</a>
         <a class="menu-item" href="#" data-view="historyView">Historique</a>
-        <a class="menu-item" href="#" data-view="logsView">Logs</a>
+        <a class="menu-item" href="#" data-view="logsAuditView">Logs & audit</a>
       </nav>
+      <div class="system-pulse" id="systemPulse"></div>
     </aside>
 
     <main class="main-content">
-      <header class="navbar card">
-        <div class="brand-full">
-          <img src="/assets/passbolt.png" alt="Passbolt" onerror="this.onerror=null;this.src='/assets/logo-full.svg';" />
-        </div>
-      </header>
-
-      <section id="importView" class="view-section active-view">
-        <section class="card">
-          <p class="muted">CSV supporté: <code>email,firstname,lastname,role</code> ou <code>email,firstname,lastname,role,groups</code> (groupes séparés par <code>;</code>).</p>
-          <div class="controls-row">
-            <input type="file" id="file" accept=".csv" />
-            <label class="check"><input type="checkbox" id="rollbackOnError" /> Rollback si erreur</label>
-            <button id="uploadBtn" class="btn-primary">Importer</button>
-          </div>
-
-          <div class="delete-box">
-            <h3>Delete users from CSV</h3>
-            <p class="muted">Par défaut : suppression du dernier import.</p>
-            <p id="deleteConfigStatus" class="muted">Vérification de la configuration API delete...</p>
-            <div class="controls-row">
-              <label for="deleteBatchSelect">Batch cible</label>
-              <select id="deleteBatchSelect"></select>
-              <label class="check"><input type="checkbox" id="deleteDryRunOnly" checked /> Preview uniquement (dry-run)</label>
-              <button id="deletePreviewBtn" class="btn-secondary" type="button">Prévisualiser</button>
-              <button id="deleteExecuteBtn" class="btn-danger" type="button">Supprimer les utilisateurs</button>
-            </div>
-            <ul id="deleteEligibilitySummary" class="summary-list"></ul>
-            <table>
-              <thead>
-                <tr>
-                  <th>Email</th><th>Batch</th><th>Found</th><th>User ID</th><th>Role</th><th>Activation</th><th>Status</th><th>Message</th>
-                </tr>
-              </thead>
-              <tbody id="deleteResultsRows"></tbody>
-            </table>
-          </div>
-
-          <div class="progress"><div id="bar" class="bar"></div></div>
-          <div class="progress-meta">
-            <span id="progressPercent">0%</span>
-            <span id="progressStage" class="stage">Prévalidation</span>
-          </div>
-          <p id="summary" class="muted"></p>
-        </section>
-
-        <section class="card grid-two">
-          <div>
-            <h3>Résultats import</h3>
-            <table>
-              <thead><tr><th>Email</th><th>Status</th><th>Groupes demandés</th><th>Détails</th></tr></thead>
-              <tbody id="results"></tbody>
-            </table>
-          </div>
-          <div>
-            <h3>Résumé final</h3>
-            <ul id="finalSummary" class="summary-list"></ul>
-          </div>
-        </section>
-      </section>
-
-      <section id="usersView" class="view-section">
-        <section class="card">
-          <h3>Utilisateurs (dernier import)</h3>
-          <table>
-            <thead>
-              <tr><th>Email</th><th>Rôle</th><th>Statut</th><th>Groupes</th></tr>
-            </thead>
-            <tbody id="usersRows"></tbody>
-          </table>
-          <p id="usersEmpty" class="muted">Aucun import exécuté pour le moment.</p>
-        </section>
-      </section>
-
-      <section id="historyView" class="view-section">
-        <section class="card">
-          <h3>Dernier import</h3>
-          <ul id="lastImportSummary" class="summary-list"></ul>
-        </section>
-
-        <section class="card">
-          <h3>Historique et base locale</h3>
-          <div id="dbSummary" class="stats-grid"></div>
-        </section>
-
-        <section class="card">
-          <h3>Lots d'import</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>batch_uuid</th><th>filename</th><th>created_at</th><th>total_rows</th>
-                <th>success_count</th><th>error_count</th><th>status</th><th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="batchesRows"></tbody>
-          </table>
-          <p id="batchesEmpty" class="muted">Aucun batch enregistré dans la base locale.</p>
-        </section>
-
-        <section class="card">
-          <h3>Détail batch sélectionné</h3>
-          <p id="selectedBatchTitle" class="muted">Sélectionnez un batch pour afficher les utilisateurs.</p>
-          <table>
-            <thead>
-              <tr>
-                <th>email</th><th>firstname</th><th>lastname</th><th>requested_role</th><th>import_status</th>
-                <th>activation_link</th><th>last_known_activation_state</th><th>deletable_candidate</th><th>created_by_tool</th>
-              </tr>
-            </thead>
-            <tbody id="batchUsersRows"></tbody>
-          </table>
-        </section>
-      </section>
-
-      <section id="logsView" class="view-section">
-        <section class="card">
-          <h3>Historique des logs</h3>
-          <div id="logsSummary" class="stats-grid"></div>
-          <div class="controls-row logs-controls">
-            <label for="logsBatchFilter">Batch</label>
-            <select id="logsBatchFilter"></select>
-            <label for="logsScopeFilter">Scope</label>
-            <select id="logsScopeFilter">
-              <option value="">Tous</option>
-              <option value="import">import</option>
-              <option value="delete">delete</option>
-              <option value="system">system</option>
-              <option value="ui">ui</option>
-            </select>
-            <label for="logsLevelFilter">Niveau</label>
-            <select id="logsLevelFilter">
-              <option value="">Tous</option>
-              <option value="info">info</option>
-              <option value="warning">warning</option>
-              <option value="error">error</option>
-              <option value="debug">debug</option>
-              <option value="audit">audit</option>
-            </select>
-            <button id="logsRefreshBtn" class="btn-secondary" type="button">Rafraîchir</button>
-            <button id="logsExportBtn" class="btn-primary" type="button">Exporter les logs CSV</button>
-            <button id="logsDeleteBatchBtn" class="btn-danger" type="button">Supprimer les logs du batch</button>
-            <button id="logsDeleteAllBtn" class="btn-danger" type="button">Supprimer les logs</button>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th><th>Scope</th><th>Level</th><th>Batch UUID</th><th>Email</th><th>Message</th>
-              </tr>
-            </thead>
-            <tbody id="logsRows"></tbody>
-          </table>
-          <p id="logsEmpty" class="muted">Aucun log trouvé.</p>
-          <div id="logs" class="logs"></div>
-        </section>
-      </section>
+      <section id="dashboardView" class="view-section active-view"></section>
+      <section id="importerView" class="view-section"></section>
+      <section id="deletionsView" class="view-section"></section>
+      <section id="historyView" class="view-section"></section>
+      <section id="logsAuditView" class="view-section"></section>
     </main>
   </div>
 
-  <div id="toast" class="toast toast-info"></div>
+  <div id="toast" class="toast"></div>
   <script src="/script.js"></script>
 </body>
 </html>
