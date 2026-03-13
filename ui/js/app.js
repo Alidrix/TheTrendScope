@@ -24,7 +24,8 @@ function initThemeToggle() {
   const toggle = $('themeToggle');
   if (!toggle) return;
   const updateLabel = () => {
-    toggle.textContent = state.theme === 'light' ? 'Mode sombre' : 'Mode clair';
+    toggle.textContent = state.theme === 'light' ? '🌙' : '☀️';
+    toggle.title = state.theme === 'light' ? 'Passer en mode sombre' : 'Passer en mode clair';
   };
   updateLabel();
   toggle.addEventListener('click', () => {
