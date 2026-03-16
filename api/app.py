@@ -39,11 +39,18 @@ from db import (
     update_user_delete_state,
 )
 
-from passbolt_api import (
-    PassboltApiAuthService as PassboltApiAuthServiceV2,
-    PassboltDeleteService as PassboltDeleteServiceV2,
-    PassboltGroupService as PassboltGroupServiceV2,
-)
+PASSBOLT_API_MODULE_ERROR: str | None = None
+try:
+    from passbolt_api import (
+        PassboltApiAuthService as PassboltApiAuthServiceV2,
+        PassboltDeleteService as PassboltDeleteServiceV2,
+        PassboltGroupService as PassboltGroupServiceV2,
+    )
+except ImportError as error:
+    PassboltApiAuthServiceV2 = None
+    PassboltDeleteServiceV2 = None
+    PassboltGroupServiceV2 = None
+    PASSBOLT_API_MODULE_ERROR = str(error)
 
 app = Flask(__name__)
 init_db()
@@ -71,7 +78,11 @@ PASSBOLT_API_DEBUG = os.getenv("PASSBOLT_API_DEBUG", "false").lower() in {"1", "
 DELETE_ALLOWED_PENDING_STATES = {"pending", "unknown", "", None}
 DELETE_ACTIVE_STATES = {"active", "activated", "setup_completed", "enabled"}
 
-docker_client = docker.from_env()
+try:
+    docker_client = docker.from_env()
+except Exception as error:
+    docker_client = None
+    print(f"[WARNING] Docker SDK unavailable at startup: {error}")
 
 SAFE_FIELD = re.compile(r"^[A-Za-z0-9@._+\-']+$")
 SAFE_GROUP = re.compile(r"^[A-Za-z0-9 _@.\-']+$")
@@ -137,6 +148,8 @@ def _decode_output(value: Any) -> str:
 
 
 def _list_container_names() -> list[str]:
+    if docker_client is None:
+        raise RuntimeError('docker client unavailable')
     containers = docker_client.containers.list()
     return [container.name for container in containers]
 
@@ -160,6 +173,8 @@ def _detect_cli_path(container_name: str) -> str:
         "/usr/share/php/passbolt/bin/cake",
         "/var/www/passbolt/bin/cake",
     ]
+    if docker_client is None:
+        return PASSBOLT_CLI_PATH
     try:
         container = docker_client.containers.get(container_name)
     except Exception:
@@ -250,6 +265,14 @@ def _run_shell_command(container_name: str, cli_path: str, shell_command: str) -
         f"docker-sdk exec {shlex.quote(container_name)} -- "
         f"su -m -c {shlex.quote(shell_command)} -s /bin/sh www-data"
     )
+
+    if docker_client is None:
+        return {
+            'returncode': -4,
+            'stdout': '',
+            'stderr': 'docker client unavailable',
+            'command': command_str,
+        }
 
     try:
         container = docker_client.containers.get(container_name)
@@ -1116,6 +1139,35 @@ def _build_delete_result(
     }
 
 
+
+
+def _passbolt_api_module_status() -> dict[str, Any]:
+    available = PassboltApiAuthServiceV2 is not None and PassboltDeleteServiceV2 is not None and PassboltGroupServiceV2 is not None
+    return {
+        "available": bool(available),
+        "error": PASSBOLT_API_MODULE_ERROR,
+    }
+
+
+def _passbolt_api_unavailable_response(feature: str, status: int = 503) -> Any:
+    state = _passbolt_api_module_status()
+    message = f"Passbolt API advanced module unavailable for {feature}"
+    payload = {
+        "error": message,
+        "feature": feature,
+        "module": state,
+    }
+    _save_live_log("system", "warning", message, event_code="passbolt.api.module.unavailable", payload=payload)
+    return jsonify(payload), status
+
+
+def _passbolt_api_services() -> tuple[Any, Any]:
+    if PassboltApiAuthServiceV2 is None or PassboltDeleteServiceV2 is None:
+        raise RuntimeError("passbolt_api module unavailable")
+    auth_service = PassboltApiAuthServiceV2()
+    service = PassboltDeleteServiceV2(auth_service)
+    return auth_service, service
+
 def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any = None) -> dict[str, Any]:
     batch = get_batch(batch_uuid)
     if not batch:
@@ -1123,8 +1175,16 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
 
     users = get_batch_users(batch_uuid)
     total = len(users)
-    auth_service = PassboltApiAuthServiceV2()
-    service = PassboltDeleteServiceV2(auth_service)
+    try:
+        auth_service, service = _passbolt_api_services()
+    except Exception:
+        return {
+            "batch_uuid": batch_uuid,
+            "status": "error",
+            "message": "Passbolt delete API module unavailable",
+            "module": _passbolt_api_module_status(),
+            "results": [],
+        }
     results: list[dict[str, Any]] = []
 
     tls = get_tls_diagnostics()
@@ -1591,6 +1651,7 @@ def health() -> Any:
                 "cli_path_found": cli_check.get("ok", False),
             },
             "diagnostics": diagnostics,
+            "passbolt_api_module": _passbolt_api_module_status(),
         }
     )
 
@@ -1700,6 +1761,8 @@ def pending_group_assignments() -> Any:
 
 @app.route("/retry-pending-group-assignments", methods=["POST"])
 def retry_pending_group_assignments() -> Any:
+    if PassboltApiAuthServiceV2 is None or PassboltGroupServiceV2 is None:
+        return _passbolt_api_unavailable_response("retry-pending-group-assignments")
     auth_service = PassboltApiAuthServiceV2()
     group_service = PassboltGroupServiceV2(auth_service)
     group_tls = get_tls_diagnostics()
@@ -1755,7 +1818,10 @@ def retry_pending_group_assignments() -> Any:
 
 
 @app.route("/delete-config-status", methods=["GET"])
+@app.route("/api/delete-config-status", methods=["GET"])
 def delete_config_status() -> Any:
+    if PassboltApiAuthServiceV2 is None:
+        return _passbolt_api_unavailable_response("delete-config-status")
     auth = PassboltApiAuthServiceV2()
     report = auth.run_diagnostic()
     groups_step = next((step for step in report.get("steps", []) if step.get("id") == "groups"), {})
@@ -1778,6 +1844,8 @@ def delete_config_status() -> Any:
 @app.route("/passbolt/health", methods=["GET", "POST"])
 @app.route("/api/passbolt/health", methods=["GET", "POST"])
 def passbolt_health() -> Any:
+    if PassboltApiAuthServiceV2 is None:
+        return _passbolt_api_unavailable_response("passbolt-health")
     auth = PassboltApiAuthServiceV2()
     report = auth.run_diagnostic()
     _save_live_log(

@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
 COPY db.py .
+COPY passbolt_api.py .
 
 RUN mkdir -p /app/data
 

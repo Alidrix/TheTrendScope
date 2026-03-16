@@ -1,21 +1,20 @@
 async function readResponsePayload(res) {
+  if (!res || res.bodyUsed) return { payload: {}, text: '' };
   const contentType = (res.headers.get('content-type') || '').toLowerCase();
   const text = await res.text();
   if (!text) return { payload: {}, text: '' };
 
+  const tryJson = () => {
+    try { return JSON.parse(text); } catch { return null; }
+  };
+
   if (contentType.includes('application/json')) {
-    try {
-      return { payload: JSON.parse(text), text };
-    } catch {
-      return { payload: { raw: text }, text };
-    }
+    const parsed = tryJson();
+    return { payload: parsed ?? { raw: text }, text };
   }
 
-  try {
-    return { payload: JSON.parse(text), text };
-  } catch {
-    return { payload: { message: text }, text };
-  }
+  const parsed = tryJson();
+  return { payload: parsed ?? { message: text }, text };
 }
 
 function buildHttpError(res, payload, fallback) {
@@ -43,5 +42,6 @@ export async function apiPost(path, body, options = {}) {
 
 export async function apiDelete(path) {
   const res = await fetch(path, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`Suppression impossible (${res.status})`);
+  const { payload } = await readResponsePayload(res);
+  if (!res.ok) throw buildHttpError(res, payload, `Suppression impossible (${res.status})`);
 }
