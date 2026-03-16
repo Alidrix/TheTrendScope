@@ -164,6 +164,8 @@ class PassboltApiAuthService:
             "--yes",
             "--pinentry-mode",
             "loopback",
+            "--status-fd",
+            "2",
             "--no-tty",
             "--armor",
             "--detach-sign",
@@ -196,9 +198,13 @@ class PassboltApiAuthService:
             "returncode": None,
             "stderr": "",
             "stdout": "",
+            "status_fd": "2",
+            "status_output": "",
             "output_size": 0,
             "output_type": "",
             "python_exception": "",
+            "loopback_supported": True,
+            "loopback_refused": False,
         }
 
         try:
@@ -212,6 +218,17 @@ class PassboltApiAuthService:
             details["returncode"] = proc.returncode
             details["stderr"] = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
             details["stdout"] = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+            details["status_output"] = "\n".join(
+                line for line in details["stderr"].splitlines() if line.startswith("[GNUPG:]")
+            )
+            lower_stderr = details["stderr"].lower()
+            if "pinentry mode 'loopback' failed" in lower_stderr or "not supported" in lower_stderr:
+                details["loopback_supported"] = False
+                details["loopback_refused"] = True
+                details["remediation"] = "Vérifier gpg-agent.conf (allow-loopback-pinentry) puis recharger gpg-agent"
+            elif "bad passphrase" in lower_stderr and "loopback" in lower_stderr:
+                details["loopback_refused"] = True
+                details["remediation"] = "Le mode loopback semble refusé: vérifier gpg-agent et la passphrase transmise en --passphrase-fd"
 
             if proc.returncode != 0:
                 raise RuntimeError(details["stderr"] or f"gpg exited with code {proc.returncode}")
