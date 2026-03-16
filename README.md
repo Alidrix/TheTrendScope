@@ -1,4 +1,4 @@
-# TheTrendScope — Cockpit Passbolt Import, Groupes, Suppressions & Santé API
+# Passbolt Cockpit - Import d'utilisateur par .CSV
 
 ## Vue d’ensemble
 
