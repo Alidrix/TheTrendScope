@@ -24,6 +24,28 @@ function updateDryRunToggle() {
   if (text) text.textContent = checked ? 'Activée' : 'Désactivée';
 }
 
+async function readResponsePayload(res) {
+  const text = await res.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { message: text };
+  }
+}
+
+function appendImportEventLine(event) {
+  if (['log', 'stderr', 'stdout'].includes(event.type)) {
+    appendConsoleLine('importConsole', `${event.type.toUpperCase()} | ${event.message || ''}`);
+    return;
+  }
+  if (event.type === 'audit' && event.payload) {
+    const level = (event.payload.level || 'info').toUpperCase();
+    const msg = event.payload.message || event.payload.code || 'audit event';
+    appendConsoleLine('importConsole', `${level} | ${msg}`);
+  }
+}
+
 async function runImportFlow() {
   const f = $('importFile').files?.[0];
   if (!f) return setToast('Sélectionnez un CSV.');
@@ -40,14 +62,8 @@ async function runImportFlow() {
 
     const res = await fetch('/api/import-stream', { method: 'POST', body: form });
     if (!res.ok) {
-      let reason = `HTTP ${res.status}`;
-      try {
-        const payload = await res.json();
-        reason = payload?.error || payload?.message || reason;
-      } catch {
-        const txt = await res.text();
-        if (txt) reason = txt.slice(0, 180);
-      }
+      const payload = await readResponsePayload(res);
+      const reason = payload?.error || payload?.message || `HTTP ${res.status}`;
       throw new Error(`Flux import indisponible (${reason})`);
     }
     if (!res.body) throw new Error('Flux import indisponible (stream non supporté)');
@@ -63,7 +79,7 @@ async function runImportFlow() {
       for (const line of lines) {
         if (!line.trim()) continue;
         const event = JSON.parse(line);
-        if (['log', 'stderr', 'stdout'].includes(event.type)) appendConsoleLine('importConsole', `${event.type.toUpperCase()} | ${event.message}`);
+        appendImportEventLine(event);
         if (event.type === 'progress') {
           const p = event.payload || {};
           setImportProgress(p.percent || 0, p.stage || 'preview');

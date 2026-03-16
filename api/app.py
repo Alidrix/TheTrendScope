@@ -9,7 +9,8 @@ import uuid
 from urllib.parse import urljoin
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
-from threading import Lock
+from queue import Queue
+from threading import Lock, Thread
 from typing import Any
 
 import docker
@@ -1635,6 +1636,7 @@ def import_csv() -> Any:
 
 
 @app.route("/import-stream", methods=["POST"])
+@app.route("/api/import-stream", methods=["POST"])
 def import_csv_stream() -> Any:
     file_storage = request.files.get("file")
     source_filename = (file_storage.filename if file_storage else "unknown.csv") or "unknown.csv"
@@ -1654,26 +1656,37 @@ def import_csv_stream() -> Any:
         yield json.dumps({"type": "log", "message": f"Import started for {len(rows)} row(s)"}, ensure_ascii=False) + "\n"
         yield json.dumps({"type": "debug", "payload": diagnostics}, ensure_ascii=False) + "\n"
 
-        events: list[dict[str, Any]] = []
+        event_queue: Queue[Any] = Queue()
+        done_marker = object()
 
         def emit(event: dict[str, Any]) -> None:
-            events.append(event)
+            event_queue.put(event)
 
-        payload = _process_rows(
-            rows,
-            container,
-            cli_path,
-            rollback_on_error=rollback_on_error,
-            source_filename=source_filename,
-            emit=emit,
-        )
+        def worker() -> None:
+            try:
+                payload = _process_rows(
+                    rows,
+                    container,
+                    cli_path,
+                    rollback_on_error=rollback_on_error,
+                    source_filename=source_filename,
+                    emit=emit,
+                )
+                payload["diagnostics"] = diagnostics
+                _save_live_log("import", "info", "Import stream completed", batch_uuid=payload.get("batch_uuid"), event_code="import.stream.done", payload={"status": payload.get("status"), "total": payload.get("total")})
+                event_queue.put({"type": "final", "payload": payload})
+            except Exception as error:
+                event_queue.put({"type": "stderr", "message": f"Import stream error: {error}"})
+            finally:
+                event_queue.put(done_marker)
 
-        for event in events:
+        Thread(target=worker, daemon=True).start()
+
+        while True:
+            event = event_queue.get()
+            if event is done_marker:
+                break
             yield json.dumps(event, ensure_ascii=False) + "\n"
-
-        payload["diagnostics"] = diagnostics
-        _save_live_log("import", "info", "Import stream completed", batch_uuid=payload.get("batch_uuid"), event_code="import.stream.done", payload={"status": payload.get("status"), "total": payload.get("total")})
-        yield json.dumps({"type": "final", "payload": payload}, ensure_ascii=False) + "\n"
 
     return Response(generate(), mimetype="application/x-ndjson")
 
@@ -1763,6 +1776,7 @@ def delete_config_status() -> Any:
 
 
 @app.route("/passbolt/health", methods=["GET", "POST"])
+@app.route("/api/passbolt/health", methods=["GET", "POST"])
 def passbolt_health() -> Any:
     auth = PassboltApiAuthServiceV2()
     report = auth.run_diagnostic()
