@@ -29,26 +29,8 @@ export function renderDashboardView() {
         <div class="section-header"><h3>Activité</h3></div>
         <div id="activityBlock"></div>
       </div>
-      <div class="card">
-        <div class="section-header"><h3>Actions</h3></div>
-        <div id="quickActionsBlock" class="dashboard-quick-actions"></div>
-      </div>
     </div>
   `;
-  $('quickActionsBlock').innerHTML = `
-    <button class="btn btn-primary" data-target-view="importerView">Nouvel import</button>
-    <button class="btn btn-secondary" data-target-view="historyView">Historique</button>
-    <button class="btn btn-secondary" data-target-view="deletionsView">Prévisualiser</button>
-    <button class="btn btn-secondary" data-target-view="passboltHealthView">Santé API</button>
-    <button class="btn btn-secondary" data-target-view="logsAuditView">Logs</button>
-  `;
-  document.querySelectorAll('[data-target-view]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const view = button.dataset.targetView;
-      const nav = document.querySelector(`.menu-item[data-view="${view}"]`);
-      nav?.click();
-    });
-  });
 }
 
 export async function refreshDashboard() {
