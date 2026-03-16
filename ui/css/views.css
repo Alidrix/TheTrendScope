@@ -89,3 +89,38 @@ th { position: sticky; top: 0; background: var(--color-surface-2); z-index: 1; }
 .health-step-skipped { border-left-color: var(--gray-400); }
 .health-step-head { display:flex; justify-content:space-between; gap:10px; align-items:center; }
 .json-block { white-space:pre-wrap; word-break:break-word; background:var(--surface-alt); border-radius:8px; padding:8px; }
+
+.deletion-status-grid { display:grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: var(--space-3); margin-bottom: var(--space-4); }
+.status-mini-card { border:1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); background: color-mix(in oklab, var(--color-surface-2), transparent 10%); display:grid; gap:6px; }
+.status-mini-card .label { font-size:12px; color: var(--color-text-muted); }
+.deletion-target-grid { display:grid; grid-template-columns: 1.4fr 1fr auto; gap: var(--space-3); align-items:end; }
+.align-end { align-items:flex-end; }
+.deletion-target-summary { margin-top: var(--space-3); display:flex; flex-wrap:wrap; gap: var(--space-2); }
+.deletion-target-pill { padding: 7px 10px; border-radius: 999px; border:1px solid var(--color-border); font-size:12px; background: var(--color-surface-2); }
+.deletion-target-pill.ok { border-color: color-mix(in oklab, var(--color-success), transparent 40%); }
+.deletion-target-pill.warn { border-color: color-mix(in oklab, var(--color-warning), transparent 35%); }
+.deletion-target-pill.neutral { border-color: color-mix(in oklab, var(--color-info), transparent 45%); }
+.eligibility-tag { display:inline-flex; border-radius:999px; padding:3px 9px; border:1px solid var(--color-border); font-size:12px; }
+.eligibility-tag.good { background: color-mix(in oklab, var(--color-success), transparent 86%); border-color: color-mix(in oklab, var(--color-success), transparent 45%); }
+.eligibility-tag.warn { background: color-mix(in oklab, var(--color-warning), transparent 88%); border-color: color-mix(in oklab, var(--color-warning), transparent 45%); }
+.eligibility-tag.danger { background: color-mix(in oklab, var(--color-danger), transparent 89%); border-color: color-mix(in oklab, var(--color-danger), transparent 45%); }
+.eligibility-tag.excluded { background: color-mix(in oklab, var(--color-info), transparent 89%); border-color: color-mix(in oklab, var(--color-info), transparent 45%); }
+.eligibility-tag.neutral { background: var(--color-surface-2); }
+.deletion-synthesis-grid { display:grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: var(--space-2); }
+.synthesis-item { border:1px solid var(--color-border); border-radius: var(--radius-sm); padding: var(--space-3); background: var(--color-surface-2); display:grid; gap:8px; }
+.synthesis-item span { color: var(--color-text-muted); font-size:12px; }
+.synthesis-item strong { font-size:20px; }
+.controlled-action-card { background: linear-gradient(180deg, color-mix(in oklab, var(--color-warning), transparent 95%), var(--color-surface-1)); }
+.confirm-control { display:flex; gap:10px; align-items:flex-start; }
+.confirm-control input { width:18px; margin-top:2px; }
+.technical-logs summary { cursor:pointer; font-weight:600; }
+.soft-empty { border:1px dashed var(--color-border); border-radius: var(--radius-sm); padding: var(--space-3); color: var(--color-text-muted); }
+
+@media (max-width: 1200px) {
+  .deletion-status-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .deletion-target-grid { grid-template-columns: 1fr; }
+  .deletion-synthesis-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@media (max-width: 760px) {
+  .deletion-status-grid, .deletion-synthesis-grid { grid-template-columns: 1fr; }
+}

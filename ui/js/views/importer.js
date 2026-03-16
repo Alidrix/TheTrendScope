@@ -1,6 +1,5 @@
 import { state } from '../state.js';
 import { $, escapeHtml, setToast, textCell } from '../utils.js';
-import { apiGet } from '../api.js';
 import { kpiCard } from '../components/kpi-card.js';
 import { appendConsoleLine } from '../components/console-panel.js';
 import { statusBadge } from '../components/status-chip.js';
@@ -33,7 +32,6 @@ async function runImportFlow() {
   $('importProgressWrap').style.display = 'block';
   setImportProgress(0, 'prévalidation');
   try {
-    await apiGet('/api/health');
     const form = new FormData();
     form.append('file', f);
     const label = $('importBatchLabel')?.value?.trim();

@@ -1079,16 +1079,39 @@ class PassboltDeleteService:
         return status < 300, message, payload
 
 
-def _build_delete_result(email: str, batch_uuid: str, status: str, message: str = "", found: bool = False, user_id: str = "", actual_role: str = "", activation_state: str = "") -> dict[str, Any]:
+def _build_delete_result(
+    email: str,
+    batch_uuid: str,
+    status: str,
+    message: str = "",
+    found: bool = False,
+    user_id: str = "",
+    actual_role: str = "",
+    activation_state: str = "",
+    requested_role: str = "",
+    eligible: bool = False,
+    exclusion_reason: str = "",
+    dry_run_status: str = "not_run",
+    dry_run_details: str = "",
+    final_action_allowed: bool = False,
+) -> dict[str, Any]:
+    role = (actual_role or requested_role or "unknown").lower()
     return {
         "email": email,
+        "role": role,
         "batch_uuid": batch_uuid,
         "found": found,
         "user_id": user_id,
         "actual_role": actual_role,
+        "requested_role": requested_role,
         "activation_state": activation_state,
         "status": status,
         "message": message,
+        "eligible": bool(eligible),
+        "exclusion_reason": exclusion_reason,
+        "dry_run_status": dry_run_status,
+        "dry_run_details": dry_run_details,
+        "final_action_allowed": bool(final_action_allowed),
     }
 
 
@@ -1097,7 +1120,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
     if not batch:
         return {"error": "batch not found", "batch_uuid": batch_uuid}
 
-    users = get_deletable_users_for_batch(batch_uuid)
+    users = get_batch_users(batch_uuid)
     total = len(users)
     auth_service = PassboltApiAuthServiceV2()
     service = PassboltDeleteServiceV2(auth_service)
@@ -1158,35 +1181,43 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
         email = (user.get("email") or "").strip().lower()
         created_by_tool = int(user.get("created_by_tool") or 0) == 1
         activation_state_local = (user.get("last_known_activation_state") or "unknown").lower()
+        requested_role = (user.get("requested_role") or "").strip().lower()
 
         if emit:
             emit({"type": "progress", "payload": {"current": index, "total": max(total, 1), "percent": round((index / max(total, 1)) * 100, 2), "stage": "lookup"}})
 
         if not created_by_tool:
-            row = _build_delete_result(email, batch_uuid, "SKIPPED_NOT_TOOL_MANAGED", message="User not created by tool")
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_NOT_TOOL_MANAGED", message="User not created by tool", requested_role=requested_role, exclusion_reason="Utilisateur non créé par cet outil")
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.not_tool")
             continue
 
         if (not latest_batch) and activation_state_local not in DELETE_ALLOWED_PENDING_STATES:
-            row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Anciens batches: seuls les comptes non activés sont supprimables", activation_state=activation_state_local)
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Anciens batches: seuls les comptes non activés sont supprimables", activation_state=activation_state_local, requested_role=requested_role, exclusion_reason="Compte actif d'un ancien batch")
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.active")
             continue
 
+        if requested_role == "admin":
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_ADMIN", message="Compte administrateur déclaré dans le CSV — suppression interdite", requested_role=requested_role, exclusion_reason="Admin protégé (CSV)", dry_run_status="skipped")
+            results.append(row)
+            log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
+            _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.admin_csv")
+            continue
+
         try:
             passbolt_user = service.find_user_by_email(email)
         except Exception as error:
-            row = _build_delete_result(email, batch_uuid, "ERROR", message=str(error))
+            row = _build_delete_result(email, batch_uuid, "ERROR", message=str(error), requested_role=requested_role, exclusion_reason="Erreur de recherche utilisateur", dry_run_status="error", dry_run_details=str(error))
             results.append(row)
             log_delete_event(batch_uuid, "lookup", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "error", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.lookup.error")
             continue
 
         if not passbolt_user:
-            row = _build_delete_result(email, batch_uuid, "NOT_FOUND", message="User not found in Passbolt")
+            row = _build_delete_result(email, batch_uuid, "NOT_FOUND", message="User not found in Passbolt", requested_role=requested_role, exclusion_reason="Utilisateur introuvable dans Passbolt", dry_run_status="not_found")
             results.append(row)
             log_delete_event(batch_uuid, "lookup", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.lookup.not_found")
@@ -1197,14 +1228,14 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
         activation_state = service._resolve_activation_state(passbolt_user, activation_state_local)
 
         if actual_role == "admin":
-            row = _build_delete_result(email, batch_uuid, "SKIPPED_ADMIN", message="Compte administrateur protégé — suppression interdite", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_ADMIN", message="Compte administrateur protégé — suppression interdite", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, exclusion_reason="Admin protégé", dry_run_status="skipped")
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.admin")
             continue
 
         if activation_state in DELETE_ACTIVE_STATES:
-            row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Compte déjà activé/configuré — suppression interdite", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            row = _build_delete_result(email, batch_uuid, "SKIPPED_ACTIVE_USER", message="Compte déjà activé/configuré — suppression interdite", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, exclusion_reason="Blocage métier Passbolt", dry_run_status="skipped")
             results.append(row)
             log_delete_event(batch_uuid, "filter", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.activated")
@@ -1214,7 +1245,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             emit({"type": "progress", "payload": {"current": index, "total": max(total, 1), "percent": round((index / max(total, 1)) * 100, 2), "stage": "dry-run"}})
         dry_ok, dry_message, _ = service.delete_user_dry_run(user_id)
         if not dry_ok:
-            row = _build_delete_result(email, batch_uuid, "BLOCKED_BY_PASSBOLT", message=dry_message or "Dry-run rejected by Passbolt", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            row = _build_delete_result(email, batch_uuid, "BLOCKED_BY_PASSBOLT", message=dry_message or "Dry-run rejected by Passbolt", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, eligible=False, exclusion_reason="Blocage métier Passbolt", dry_run_status="blocked", dry_run_details=dry_message or "Dry-run rejected by Passbolt")
             results.append(row)
             log_delete_event(batch_uuid, "dry_run", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.blocked")
@@ -1225,7 +1256,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
         if emit:
             emit({"type": "stdout", "message": f"dry-run ok: {email}"})
         if dry_run_only:
-            row = _build_delete_result(email, batch_uuid, "DRY_RUN_OK", message="Dry-run ok (preview only)", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            row = _build_delete_result(email, batch_uuid, "DRY_RUN_OK", message="Dry-run ok (preview only)", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, eligible=True, dry_run_status="ok", dry_run_details="Dry-run validé", final_action_allowed=True)
             results.append(row)
             continue
 
@@ -1233,14 +1264,14 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             emit({"type": "progress", "payload": {"current": index, "total": max(total, 1), "percent": round((index / max(total, 1)) * 100, 2), "stage": "delete"}})
         delete_ok, delete_message, _ = service.delete_user(user_id)
         if not delete_ok:
-            row = _build_delete_result(email, batch_uuid, "ERROR", message=delete_message or "Delete failed", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state)
+            row = _build_delete_result(email, batch_uuid, "ERROR", message=delete_message or "Delete failed", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, eligible=True, dry_run_status="ok", dry_run_details="Dry-run validé", final_action_allowed=False, exclusion_reason="Erreur suppression réelle")
             results.append(row)
             log_delete_event(batch_uuid, "delete", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "error", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.execute.error")
             continue
 
         update_user_delete_state(batch_uuid=batch_uuid, email=email, activation_state="deleted", deletable_candidate=0)
-        row = _build_delete_result(email, batch_uuid, "DELETED", message="User deleted", found=True, user_id=user_id, actual_role=actual_role, activation_state="deleted")
+        row = _build_delete_result(email, batch_uuid, "DELETED", message="User deleted", found=True, user_id=user_id, actual_role=actual_role, activation_state="deleted", requested_role=requested_role, eligible=True, dry_run_status="ok", dry_run_details="Dry-run validé", final_action_allowed=False)
         results.append(row)
         log_delete_event(batch_uuid, "delete", status=row["status"], message=row["message"], email=email)
         _save_live_log("delete", "audit", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.execute.success")
@@ -1250,12 +1281,20 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
     status = "success" if all(item["status"] in {"DELETED", "DRY_RUN_OK", "SKIPPED_ADMIN", "SKIPPED_NOT_TOOL_MANAGED", "SKIPPED_ACTIVE_USER", "NOT_FOUND", "BLOCKED_BY_PASSBOLT"} for item in results) else "partial"
     if emit:
         emit({"type": "progress", "payload": {"current": total, "total": max(total, 1), "percent": 100, "stage": "done"}})
+    summary = {
+        "analyzed": len(results),
+        "eligible": sum(1 for item in results if item.get("eligible")),
+        "excluded": sum(1 for item in results if not item.get("eligible")),
+        "admins_protected": sum(1 for item in results if item.get("status") == "SKIPPED_ADMIN"),
+        "errors": sum(1 for item in results if item.get("status") in {"ERROR", "BLOCKED_BY_PASSBOLT"}),
+    }
     result_payload = {
         "batch_uuid": batch_uuid,
         "status": status,
         "dry_run_only": dry_run_only,
         "total": total,
         "results": results,
+        "summary": summary,
     }
     _save_live_log("delete", "info", "Delete batch finished", batch_uuid=batch_uuid, event_code="delete.done", payload={"status": status, "total": total, "dry_run_only": dry_run_only})
     return result_payload
@@ -1553,6 +1592,11 @@ def health() -> Any:
             "diagnostics": diagnostics,
         }
     )
+
+
+@app.route("/api/health", methods=["GET"])
+def api_health() -> Any:
+    return health()
 
 
 @app.route("/debug/import", methods=["GET"])
@@ -1874,7 +1918,7 @@ def batch_deletable_users(batch_uuid: str) -> Any:
     batch = get_batch(batch_uuid)
     if not batch:
         return jsonify({"error": "batch not found"}), 404
-    users = get_deletable_users_for_batch(batch_uuid)
+    users = get_batch_users(batch_uuid)
     return jsonify({"batch_uuid": batch_uuid, "total": len(users), "items": users})
 
 
