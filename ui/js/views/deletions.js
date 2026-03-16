@@ -171,7 +171,7 @@ export async function refreshDeleteConfig() {
     deleteApiConfigured = Boolean(cfg.configured);
     deleteApiMessage = cfg.message || '';
     $('deleteApiMini').innerHTML = deleteApiConfigured
-      ? statusChip('operational', 'Opérationnelle')
+      ? statusChip('check', 'Configurée (diagnostic requis)')
       : statusChip('error', 'À configurer', deleteApiMessage);
     $('deleteBatchSelect').innerHTML = `<option value="__latest__">Dernier import</option>${(batches.items || []).map((b) => `<option value="${escapeHtml(b.batch_uuid)}">${escapeHtml(b.batch_uuid)} — ${escapeHtml(b.filename || 'Sans fichier')}</option>`).join('')}`;
     updateBatchMini();

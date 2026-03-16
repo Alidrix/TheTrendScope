@@ -4,9 +4,15 @@ import { statusChip } from '../components/status-chip.js';
 
 const STEP_COLORS = {
   success: 'operational',
-  warning: 'check',
+  warning: 'degraded',
   error: 'error',
   skipped: 'neutral'
+};
+
+const GLOBAL_COLORS = {
+  ok: { chip: 'operational', label: 'Opérationnel de bout en bout' },
+  warning: { chip: 'degraded', label: 'Testé partiellement' },
+  error: { chip: 'error', label: 'Validation échouée' }
 };
 
 function renderStep(step) {
@@ -33,11 +39,12 @@ function renderSummary(report) {
     <div class="health-pillars">
       ${cell('Connectivité', 'network')}
       ${cell('TLS', 'tls')}
-      ${cell('Healthcheck statut', 'healthcheck_status')}
-      ${cell('Auth verify', 'verify')}
+      ${cell('Binaire GPG', 'gpg_binary')}
       ${cell('GPG homedir', 'gpg_home')}
+      ${cell('Auth verify', 'verify')}
       ${cell('Auth JWT', 'jwt_login')}
-      ${cell('MFA requis', 'mfa')}
+      ${cell('verify_token', 'verify_token')}
+      ${cell('MFA requise', 'mfa')}
       ${cell('MFA TOTP', 'mfa_totp')}
       ${cell('Groupes API', 'groups')}
       ${cell('Healthcheck détaillé', 'healthcheck')}
@@ -63,7 +70,8 @@ export function renderPassboltHealthView() {
 export async function refreshPassboltHealth() {
   try {
     const report = await apiGet('/api/passbolt/health');
-    $('passboltHealthGlobal').innerHTML = statusChip(STEP_COLORS[report.overall_status === 'ok' ? 'success' : report.overall_status] || 'check', `Statut global: ${report.overall_status || 'inconnu'}`);
+    const global = GLOBAL_COLORS[report.overall_status] || { chip: 'unknown', label: 'Non détecté' };
+    $('passboltHealthGlobal').innerHTML = statusChip(global.chip, `Statut global: ${global.label}`, report.overall_status || 'inconnu');
     $('passboltHealthSummary').innerHTML = renderSummary(report);
     const steps = report.steps || [];
     $('passboltHealthSteps').innerHTML = steps.length ? steps.map(renderStep).join('') : '<div class="soft-empty">Aucune étape retournée par le backend.</div>';

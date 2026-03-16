@@ -1340,11 +1340,11 @@ def delete_config_status() -> Any:
     auth = PassboltApiAuthServiceV2()
     report = auth.run_diagnostic()
     groups_step = next((step for step in report.get("steps", []) if step.get("id") == "groups"), {})
-    has_error = any((step.get("status") == "error") for step in report.get("steps", []))
+    overall_status = report.get("overall_status")
     payload = {
-        "configured": not has_error and groups_step.get("status") == "success",
+        "configured": overall_status == "ok" and groups_step.get("status") == "success",
         "message": groups_step.get("message") or "Diagnostic API Passbolt exécuté",
-        "overall_status": report.get("overall_status"),
+        "overall_status": overall_status,
         "groups_status": groups_step.get("status", "skipped"),
     }
     _save_live_log(

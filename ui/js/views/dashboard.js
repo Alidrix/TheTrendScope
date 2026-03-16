@@ -4,9 +4,40 @@ import { $, escapeHtml, formatDate, setToast } from '../utils.js';
 import { emptyState } from '../components/empty-state.js';
 import { statusBadge, statusChip } from '../components/status-chip.js';
 
+function normalizeStatus(kind) {
+  const map = {
+    ok: { chip: 'operational', label: 'Opérationnel de bout en bout' },
+    warning: { chip: 'degraded', label: 'Testé partiellement' },
+    error: { chip: 'error', label: 'Validation échouée' },
+    missing: { chip: 'error', label: 'Dépendance manquante' },
+    partial: { chip: 'check', label: 'Configuré partiellement' },
+    configured: { chip: 'check', label: 'Configuré' },
+    unknown: { chip: 'unknown', label: 'Non détecté' }
+  };
+  return map[kind] || map.unknown;
+}
+
 function renderHealthCard(item) {
-  const ok = Boolean(item?.ok);
-  return `<div class="health-card"><h3 class="text-ellipsis">${escapeHtml(item?.label || '-')}</h3><div>${ok ? statusChip('operational', 'Opérationnel') : statusChip('check', 'À vérifier')}</div><p class="muted text-ellipsis">${escapeHtml(item?.detail || '-')}</p></div>`;
+  const status = normalizeStatus(item?.status || 'unknown');
+  return `<div class="health-card"><h3 class="text-ellipsis">${escapeHtml(item?.label || '-')}</h3><div>${statusChip(status.chip, status.label)}</div><p class="muted text-ellipsis">${escapeHtml(item?.detail || '-')}</p></div>`;
+}
+
+function deriveApiImportStatus(health) {
+  if (!health?.ok) return { status: 'unknown', detail: 'Backend import non détecté' };
+  return { status: 'configured', detail: 'Configuration import détectée' };
+}
+
+function deriveCliStatus(health) {
+  if (health?.docker?.cli_path_found) return { status: 'configured', detail: health?.cli_path || 'CLI détectée' };
+  return { status: 'missing', detail: health?.cli_path || 'CLI non détectée' };
+}
+
+function deriveApiHealthStatus(deleteCfg) {
+  const s = deleteCfg?.overall_status || 'unknown';
+  if (s === 'ok') return { status: 'ok', detail: 'JWT/MFA/Groupes validés' };
+  if (s === 'warning') return { status: 'warning', detail: deleteCfg?.message || 'Diagnostic incomplet' };
+  if (s === 'error') return { status: 'error', detail: deleteCfg?.message || 'Échec diagnostic API' };
+  return { status: 'unknown', detail: 'Diagnostic requis' };
 }
 
 export function renderDashboardView() {
@@ -44,12 +75,17 @@ export async function refreshDashboard() {
     ]);
     state.batches = batches?.items || [];
     const latest = dbSummary?.last_batch || state.batches[0];
+
+    const apiImport = deriveApiImportStatus(health);
+    const cliStatus = deriveCliStatus(health);
+    const apiHealth = deriveApiHealthStatus(deleteCfg);
+
     const healthCards = [
-      { label: 'API Import', ok: Boolean(health?.ok), detail: health?.ok ? 'Configurée' : 'Non détectée' },
-      { label: 'Création utilisateur via CLI', ok: Boolean(health?.docker?.cli_path_found), detail: health?.cli_path || 'CLI non détectée' },
-      { label: 'Groupes / Suppression API', ok: (deleteCfg?.overall_status || '') === 'ok', detail: deleteCfg?.message || 'Diagnostic requis' },
-      { label: 'Base locale', ok: true, detail: `${dbSummary?.batches_count || 0} batch` },
-      { label: 'Santé API globale', ok: (deleteCfg?.overall_status || '') === 'ok', detail: deleteCfg?.overall_status || 'unknown' }
+      { label: 'API Import', ...apiImport },
+      { label: 'Création utilisateur via CLI', ...cliStatus },
+      { label: 'Groupes / Suppression API', status: apiHealth.status, detail: deleteCfg?.groups_status ? `Groupes: ${deleteCfg.groups_status}` : (deleteCfg?.message || 'Diagnostic requis') },
+      { label: 'Base locale', status: 'configured', detail: `${dbSummary?.batches_count || 0} batch` },
+      { label: 'Santé API globale', ...apiHealth }
     ];
     $('healthGrid').innerHTML = healthCards.map((item) => renderHealthCard(item)).join('');
 

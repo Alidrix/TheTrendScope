@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shutil
 import stat
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -132,6 +134,31 @@ class PassboltApiAuthService:
         self._last_verify_token: str | None = None
         self._last_mfa_status = "not_required"
 
+    def check_gpg_binary(self) -> dict[str, Any]:
+        gpg_path = shutil.which("gpg")
+        result: dict[str, Any] = {
+            "found": bool(gpg_path),
+            "path": gpg_path or "",
+            "returncode": None,
+            "version": "",
+            "stderr": "",
+        }
+        if not gpg_path:
+            result["stderr"] = "Binary 'gpg' not found in PATH"
+            return result
+        try:
+            proc = subprocess.run([gpg_path, "--version"], capture_output=True, text=True, timeout=10, check=False)
+            stdout = (proc.stdout or "").strip()
+            first_line = stdout.splitlines()[0] if stdout else ""
+            result.update({
+                "returncode": proc.returncode,
+                "version": first_line,
+                "stderr": (proc.stderr or "").strip(),
+            })
+        except Exception as error:
+            result.update({"returncode": -1, "stderr": str(error)})
+        return result
+
     @property
     def verify_setting(self) -> bool | str:
         if self.ca_bundle:
@@ -251,12 +278,16 @@ class PassboltApiAuthService:
         return {"fingerprints": fingerprints, "count": len(fingerprints)}
 
     def _build_gpg_context(self) -> tuple[gnupg.GPG, dict[str, Any]]:
+        gpg_binary = self.check_gpg_binary()
+        if not gpg_binary.get("found") or gpg_binary.get("returncode") not in (0, None):
+            raise RuntimeError(f"Binaire gpg indisponible: {gpg_binary.get('stderr') or 'gpg --version failed'}")
         gpg_home = self._ensure_gpg_home()
         gpg = gnupg.GPG(gnupghome=gpg_home["path"])
         private_key_data = self._read_private_key_source()
         imported = self._import_private_key(gpg, private_key_data)
         usable = self._assert_private_key_usable(gpg)
         context = {
+            "gpg_binary": gpg_binary,
             "gpg_home": gpg_home,
             "private_key": {"path": self.private_key_path, "size": len(private_key_data)},
             "imported": imported,
@@ -416,6 +447,7 @@ class PassboltApiAuthService:
             DiagnosticStep("config", "Présence de la configuration minimale"),
             DiagnosticStep("network", "Accessibilité réseau de l'URL Passbolt"),
             DiagnosticStep("tls", "Validation TLS / CA bundle"),
+            DiagnosticStep("gpg_binary", "Binaire GPG disponible"),
             DiagnosticStep("healthcheck_status", "GET /healthcheck/status.json"),
             DiagnosticStep("verify", "GET /auth/verify.json"),
             DiagnosticStep("server_key", "Récupération de la clé publique serveur"),
@@ -477,20 +509,30 @@ class PassboltApiAuthService:
                 s.done("success", "Validation TLS système active", details={"verify": True})
 
             s = steps[3]; s.start()
+            gpg_binary = self.check_gpg_binary()
+            if not gpg_binary.get("found"):
+                s.done("error", "Binaire gpg introuvable", details=gpg_binary, remediation="Installer gnupg dans le conteneur backend")
+                return finalize()
+            if gpg_binary.get("returncode") not in (0, None):
+                s.done("error", "gpg --version échoué", details=gpg_binary, remediation="Vérifier l'installation de gnupg/gpg-agent/dirmngr")
+                return finalize()
+            s.done("success", "Binaire gpg disponible", details=gpg_binary)
+
+            s = steps[4]; s.start()
             status, payload, raw, _ = self._request_json("GET", "/healthcheck/status.json")
             if status >= 400 or status == 0:
                 s.done("error", "/healthcheck/status.json inaccessible", http_status=status or None, endpoint="/healthcheck/status.json", details={"error": _extract_message(payload, raw)})
                 return finalize()
             s.done("success", "/healthcheck/status.json accessible", http_status=status, endpoint="/healthcheck/status.json")
 
-            s = steps[4]; s.start()
+            s = steps[5]; s.start()
             status, payload, raw, verify_response = self._request_json("GET", "/auth/verify.json")
             if status >= 400 or status == 0:
                 s.done("error", "/auth/verify.json inaccessible", http_status=status or None, endpoint="/auth/verify.json", details={"error": _extract_message(payload, raw)})
                 return finalize()
             s.done("success", "/auth/verify.json accessible", http_status=status, endpoint="/auth/verify.json")
 
-            s = steps[5]; s.start()
+            s = steps[6]; s.start()
             key_or_url = self._extract_pgp_public_key(payload, verify_response)
             if "BEGIN PGP PUBLIC KEY BLOCK" in key_or_url:
                 server_key = key_or_url
@@ -502,40 +544,40 @@ class PassboltApiAuthService:
                 server_key = key_resp.text
             s.done("success", "Clé publique serveur récupérée", details={"length": len(server_key)})
 
-            s = steps[6]; s.start()
+            s = steps[7]; s.start()
             gpg_home_info = self._ensure_gpg_home()
             s.done("success", "Homedir GPG valide", details=gpg_home_info)
 
-            s = steps[7]; s.start()
+            s = steps[8]; s.start()
             private_key_data = self._read_private_key_source()
             s.done("success", "Clé privée locale lue", details={"path": self.private_key_path, "size": len(private_key_data)})
 
             gpg = gnupg.GPG(gnupghome=gpg_home_info["path"])
 
-            s = steps[8]; s.start()
+            s = steps[9]; s.start()
             imported = self._import_private_key(gpg, private_key_data)
             s.done("success", "Clé privée importée", details=imported)
 
-            s = steps[9]; s.start()
+            s = steps[10]; s.start()
             usable = self._assert_private_key_usable(gpg)
             s.done("success", "Clé privée utilisable", details=usable)
 
             verify_token = secrets.token_urlsafe(32)
             challenge_payload = {"version": "1.0.0", "domain": self.base_url, "verify_token": verify_token, "verify_token_expiry": _now_plus(5)}
-            s = steps[10]; s.start(); s.done("success", "Challenge JWT généré", details={"fields": list(challenge_payload.keys())})
+            s = steps[11]; s.start(); s.done("success", "Challenge JWT généré", details={"fields": list(challenge_payload.keys())})
 
-            s = steps[11]; s.start()
+            s = steps[12]; s.start()
             signed = gpg.sign(json.dumps(challenge_payload), clearsign=False, detach=True, passphrase=self.passphrase)
             if not signed:
                 s.done("error", "Signature challenge JWT échouée")
                 return finalize()
             s.done("success", "Challenge JWT signé")
 
-            s = steps[12]; s.start()
+            s = steps[13]; s.start()
             encrypted = self._encrypt_for_server(gpg, json.dumps({"user_id": self.user_id, "challenge": challenge_payload, "challenge_signature": str(signed)}), server_key)
             s.done("success", "Challenge JWT chiffré", details={"size": len(encrypted)})
 
-            s = steps[13]; s.start()
+            s = steps[14]; s.start()
             status, login_payload, raw, _ = self._request_json("POST", "/auth/jwt/login.json", {"challenge": encrypted, "user_id": self.user_id})
             if status >= 400 or status == 0:
                 s.done("error", "JWT login échoué", http_status=status or None, endpoint="/auth/jwt/login.json", details={"error": _extract_message(login_payload, raw)})
@@ -544,7 +586,7 @@ class PassboltApiAuthService:
 
             token_payload = self._extract_token_payload(gpg, login_payload)
 
-            s = steps[14]; s.start()
+            s = steps[15]; s.start()
             if token_payload.get("verify_token") != verify_token:
                 s.done("error", "verify_token mismatch", details={"sent": verify_token, "received": token_payload.get("verify_token")})
                 return finalize()
@@ -555,7 +597,7 @@ class PassboltApiAuthService:
             self._session.headers.update({"Authorization": f"Bearer {access_token}"})
             s.done("success", "verify_token validé")
 
-            s = steps[15]; s.start()
+            s = steps[16]; s.start()
             providers = token_payload.get("mfa_providers")
             if not providers:
                 body = token_payload.get("body") if isinstance(token_payload.get("body"), dict) else {}
@@ -565,7 +607,7 @@ class PassboltApiAuthService:
             else:
                 s.done("success", "MFA non requise")
 
-            s = steps[16]; s.start()
+            s = steps[17]; s.start()
             try:
                 mfa_result = self._verify_mfa_if_required(token_payload)
                 if mfa_result == "not_required":
@@ -576,21 +618,21 @@ class PassboltApiAuthService:
                 s.done("error", str(error), remediation="Configurer PASSBOLT_API_TOTP_SECRET et vérifier /mfa/verify/totp.json")
                 return finalize()
 
-            s = steps[17]; s.start()
+            s = steps[18]; s.start()
             status, payload, raw, _ = self._request_json("GET", "/auth/is-authenticated.json")
             if status >= 400 or status == 0:
                 s.done("error", "Session non authentifiée", http_status=status or None, endpoint="/auth/is-authenticated.json", details={"error": _extract_message(payload, raw)})
                 return finalize()
             s.done("success", "Session authentifiée", http_status=status, endpoint="/auth/is-authenticated.json")
 
-            s = steps[18]; s.start()
+            s = steps[19]; s.start()
             status, payload, raw, _ = self._request_json("GET", "/groups.json")
             if status >= 400 or status == 0:
                 s.done("error", "Accès /groups.json refusé", http_status=status or None, endpoint="/groups.json", details={"error": _extract_message(payload, raw)}, remediation="Vérifier permissions du compte API")
                 return finalize()
             s.done("success", "/groups.json accessible", http_status=status, endpoint="/groups.json")
 
-            s = steps[19]; s.start()
+            s = steps[20]; s.start()
             status, payload, raw, _ = self._request_json("GET", "/healthcheck.json")
             if status in (401, 403):
                 s.done("warning", "/healthcheck.json inaccessible pour ce rôle", http_status=status, endpoint="/healthcheck.json", details={"error": _extract_message(payload, raw)}, remediation="Utiliser un rôle administrateur si le healthcheck détaillé est requis")
