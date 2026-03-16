@@ -35,8 +35,10 @@ function renderSummary(report) {
       ${cell('TLS', 'tls')}
       ${cell('Healthcheck statut', 'healthcheck_status')}
       ${cell('Auth verify', 'verify')}
+      ${cell('GPG homedir', 'gpg_home')}
       ${cell('Auth JWT', 'jwt_login')}
-      ${cell('MFA', 'mfa')}
+      ${cell('MFA requis', 'mfa')}
+      ${cell('MFA TOTP', 'mfa_totp')}
       ${cell('Groupes API', 'groups')}
       ${cell('Healthcheck détaillé', 'healthcheck')}
     </div>

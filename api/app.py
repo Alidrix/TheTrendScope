@@ -69,6 +69,7 @@ PASSBOLT_API_BASE_URL = os.getenv("PASSBOLT_API_BASE_URL", "").rstrip("/")
 PASSBOLT_API_AUTH_MODE = (os.getenv("PASSBOLT_API_AUTH_MODE", "jwt") or "jwt").strip().lower()
 PASSBOLT_API_USER_ID = os.getenv("PASSBOLT_API_USER_ID", "").strip()
 PASSBOLT_API_PRIVATE_KEY_PATH = os.getenv("PASSBOLT_API_PRIVATE_KEY_PATH", "/app/keys/admin-private.asc").strip()
+PASSBOLT_API_GNUPGHOME = os.getenv("PASSBOLT_API_GNUPGHOME", "/tmp/gnupg-passbolt").strip()
 PASSBOLT_API_PASSPHRASE = os.getenv("PASSBOLT_API_PASSPHRASE", "")
 PASSBOLT_API_VERIFY_TLS = os.getenv("PASSBOLT_API_VERIFY_TLS", str(PASSBOLT_VERIFY_TLS).lower()).lower() not in {"0", "false", "no"}
 PASSBOLT_API_CA_BUNDLE = os.getenv("PASSBOLT_API_CA_BUNDLE", "").strip()
@@ -99,6 +100,7 @@ def validate_startup_configuration() -> list[str]:
         "PASSBOLT_API_USER_ID": os.getenv("PASSBOLT_API_USER_ID", ""),
         "PASSBOLT_API_PRIVATE_KEY_PATH": os.getenv("PASSBOLT_API_PRIVATE_KEY_PATH", ""),
         "PASSBOLT_API_PASSPHRASE": os.getenv("PASSBOLT_API_PASSPHRASE", ""),
+        "PASSBOLT_API_GNUPGHOME": os.getenv("PASSBOLT_API_GNUPGHOME", "/tmp/gnupg-passbolt"),
     }
     issues: list[str] = []
     for key, value in required.items():
@@ -107,6 +109,9 @@ def validate_startup_configuration() -> list[str]:
     key_path = required.get("PASSBOLT_API_PRIVATE_KEY_PATH")
     if key_path and not os.path.exists(str(key_path)):
         issues.append(f"private key file not found: {key_path}")
+    gnupg_home = os.getenv("PASSBOLT_API_GNUPGHOME", "/tmp/gnupg-passbolt").strip()
+    if gnupg_home and os.path.exists(gnupg_home) and not os.path.isdir(gnupg_home):
+        issues.append(f"PASSBOLT_API_GNUPGHOME must be a directory: {gnupg_home}")
     ca_bundle = os.getenv("PASSBOLT_API_CA_BUNDLE", "")
     if ca_bundle and not os.path.exists(ca_bundle):
         issues.append(f"CA bundle not found: {ca_bundle}")
@@ -1335,8 +1340,9 @@ def delete_config_status() -> Any:
     auth = PassboltApiAuthServiceV2()
     report = auth.run_diagnostic()
     groups_step = next((step for step in report.get("steps", []) if step.get("id") == "groups"), {})
+    has_error = any((step.get("status") == "error") for step in report.get("steps", []))
     payload = {
-        "configured": report.get("overall_status") == "ok",
+        "configured": not has_error and groups_step.get("status") == "success",
         "message": groups_step.get("message") or "Diagnostic API Passbolt exécuté",
         "overall_status": report.get("overall_status"),
         "groups_status": groups_step.get("status", "skipped"),

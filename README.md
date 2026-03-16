@@ -35,6 +35,7 @@ Variables principales :
 - `PASSBOLT_API_BASE_URL`
 - `PASSBOLT_API_USER_ID`
 - `PASSBOLT_API_PRIVATE_KEY_PATH`
+- `PASSBOLT_API_GNUPGHOME` (ex: `/tmp/gnupg-passbolt`, doit être un dossier)
 - `PASSBOLT_API_PASSPHRASE`
 - `PASSBOLT_API_VERIFY_TLS`
 - `PASSBOLT_API_CA_BUNDLE`
@@ -81,7 +82,7 @@ Réponse :
   - `message`, `details`
   - `http_status`, `endpoint`, `remediation`
 
-Étapes testées : config, réseau, TLS, verify endpoint, clés, challenge JWT, login, verify_token, MFA, endpoint authentifié, groupes, healthcheck, permissions.
+Étapes testées : config, réseau, TLS, verify endpoint, clé publique serveur, homedir GPG, lecture clé privée, import clé privée, clé privée utilisable, challenge JWT, signature, chiffrement, login, verify_token, MFA requise ou non, MFA TOTP, endpoint authentifié, groupes, healthcheck, permissions.
 
 ---
 

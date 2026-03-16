@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import stat
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -118,6 +119,7 @@ class PassboltApiAuthService:
         self.auth_mode = (os.getenv("PASSBOLT_API_AUTH_MODE", "jwt") or "jwt").strip().lower()
         self.user_id = (os.getenv("PASSBOLT_API_USER_ID", "") or "").strip()
         self.private_key_path = (os.getenv("PASSBOLT_API_PRIVATE_KEY_PATH", "/app/keys/admin-private.asc") or "").strip()
+        self.gnupg_home = (os.getenv("PASSBOLT_API_GNUPGHOME", "/tmp/gnupg-passbolt") or "").strip()
         self.passphrase = os.getenv("PASSBOLT_API_PASSPHRASE", "")
         self.verify_tls = os.getenv("PASSBOLT_API_VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
         self.ca_bundle = (os.getenv("PASSBOLT_API_CA_BUNDLE", "") or "").strip()
@@ -154,6 +156,7 @@ class PassboltApiAuthService:
             "private_key_path": bool(self.private_key_path),
             "private_key_exists": bool(self.private_key_path and os.path.exists(self.private_key_path)),
             "private_key_readable": bool(self.private_key_path and os.path.exists(self.private_key_path) and os.access(self.private_key_path, os.R_OK)),
+            "gnupg_home": bool(self.gnupg_home),
             "passphrase": bool(self.passphrase),
             "mfa_provider": self.mfa_provider == "totp",
             "totp_secret": bool(self.totp_secret),
@@ -162,7 +165,7 @@ class PassboltApiAuthService:
             "ca_bundle_readable": ca_bundle_readable,
             "verify_tls": self.verify_tls,
         }
-        required = ("base_url", "auth_mode", "user_id", "private_key_path", "private_key_exists", "private_key_readable", "passphrase")
+        required = ("base_url", "auth_mode", "user_id", "private_key_path", "private_key_exists", "private_key_readable", "gnupg_home", "passphrase")
         configured = all(checks[k] for k in required)
         if checks["ca_bundle_configured"] and (not checks["ca_bundle_exists"] or not checks["ca_bundle_readable"]):
             configured = False
@@ -190,14 +193,79 @@ class PassboltApiAuthService:
         except requests.RequestException as error:
             return 0, {}, str(error), None
 
-    def _gpg(self) -> gnupg.GPG:
+    def _ensure_gpg_home(self) -> dict[str, Any]:
+        if not self.gnupg_home:
+            raise RuntimeError("PASSBOLT_API_GNUPGHOME is empty")
+
+        expanded_home = os.path.abspath(os.path.expanduser(self.gnupg_home))
+        if os.path.exists(expanded_home) and not os.path.isdir(expanded_home):
+            raise RuntimeError(f"PASSBOLT_API_GNUPGHOME must be a directory, got file: {expanded_home}")
+
+        os.makedirs(expanded_home, mode=0o700, exist_ok=True)
+        if not os.path.isdir(expanded_home):
+            raise RuntimeError(f"PASSBOLT_API_GNUPGHOME should be a directory (it isn't): {expanded_home}")
+        if not os.access(expanded_home, os.R_OK | os.W_OK | os.X_OK):
+            raise RuntimeError(f"PASSBOLT_API_GNUPGHOME is not readable/writable: {expanded_home}")
+
+        current_mode = stat.S_IMODE(os.stat(expanded_home).st_mode)
+        if current_mode != 0o700:
+            os.chmod(expanded_home, 0o700)
+            current_mode = stat.S_IMODE(os.stat(expanded_home).st_mode)
+
+        return {
+            "path": expanded_home,
+            "exists": True,
+            "is_dir": True,
+            "readable": os.access(expanded_home, os.R_OK),
+            "writable": os.access(expanded_home, os.W_OK),
+            "executable": os.access(expanded_home, os.X_OK),
+            "mode_octal": oct(current_mode),
+        }
+
+    def _read_private_key_source(self) -> str:
+        if not self.private_key_path:
+            raise RuntimeError("PASSBOLT_API_PRIVATE_KEY_PATH is empty")
         if not os.path.exists(self.private_key_path):
             raise RuntimeError(f"Clé privée API introuvable: {self.private_key_path}")
-        gpg = gnupg.GPG(gnupghome="/tmp/gnupg-passbolt")
+        if not os.path.isfile(self.private_key_path):
+            raise RuntimeError(f"PASSBOLT_API_PRIVATE_KEY_PATH must be a file: {self.private_key_path}")
+        if not os.access(self.private_key_path, os.R_OK):
+            raise RuntimeError(f"Clé privée API illisible: {self.private_key_path}")
         with open(self.private_key_path, "r", encoding="utf-8") as handle:
-            result = gpg.import_keys(handle.read())
-        if not result.fingerprints:
+            return handle.read()
+
+    def _import_private_key(self, gpg: gnupg.GPG, private_key_data: str) -> dict[str, Any]:
+        result = gpg.import_keys(private_key_data)
+        fingerprints = list(result.fingerprints or [])
+        if not fingerprints:
             raise RuntimeError("Import de la clé privée impossible")
+        return {"fingerprints": fingerprints, "count": len(fingerprints)}
+
+    def _assert_private_key_usable(self, gpg: gnupg.GPG) -> dict[str, Any]:
+        private_keys = gpg.list_keys(secret=True)
+        if not private_keys:
+            raise RuntimeError("Aucune clé privée utilisable dans le homedir GPG")
+        fingerprints = [str(key.get("fingerprint") or "") for key in private_keys if key.get("fingerprint")]
+        if not fingerprints:
+            raise RuntimeError("Clé privée importée sans fingerprint utilisable")
+        return {"fingerprints": fingerprints, "count": len(fingerprints)}
+
+    def _build_gpg_context(self) -> tuple[gnupg.GPG, dict[str, Any]]:
+        gpg_home = self._ensure_gpg_home()
+        gpg = gnupg.GPG(gnupghome=gpg_home["path"])
+        private_key_data = self._read_private_key_source()
+        imported = self._import_private_key(gpg, private_key_data)
+        usable = self._assert_private_key_usable(gpg)
+        context = {
+            "gpg_home": gpg_home,
+            "private_key": {"path": self.private_key_path, "size": len(private_key_data)},
+            "imported": imported,
+            "usable": usable,
+        }
+        return gpg, context
+
+    def _gpg(self) -> gnupg.GPG:
+        gpg, _ = self._build_gpg_context()
         return gpg
 
     @staticmethod
@@ -351,13 +419,17 @@ class PassboltApiAuthService:
             DiagnosticStep("healthcheck_status", "GET /healthcheck/status.json"),
             DiagnosticStep("verify", "GET /auth/verify.json"),
             DiagnosticStep("server_key", "Récupération de la clé publique serveur"),
-            DiagnosticStep("private_key", "Lecture de la clé privée locale"),
+            DiagnosticStep("gpg_home", "Validation du homedir GPG local"),
+            DiagnosticStep("private_key_read", "Lecture du fichier de clé privée locale"),
+            DiagnosticStep("private_key_import", "Import de la clé privée dans le homedir GPG"),
+            DiagnosticStep("private_key_usable", "Validation de l'usage de la clé privée"),
             DiagnosticStep("challenge", "Génération du challenge JWT"),
             DiagnosticStep("sign", "Signature du challenge JWT"),
             DiagnosticStep("encrypt", "Chiffrement du challenge JWT"),
             DiagnosticStep("jwt_login", "Login JWT /auth/jwt/login.json"),
             DiagnosticStep("verify_token", "Validation du verify_token"),
-            DiagnosticStep("mfa", "MFA (TOTP si requis)"),
+            DiagnosticStep("mfa", "MFA requise ou non"),
+            DiagnosticStep("mfa_totp", "MFA TOTP si nécessaire"),
             DiagnosticStep("authenticated", "GET /auth/is-authenticated.json"),
             DiagnosticStep("groups", "GET /groups.json"),
             DiagnosticStep("healthcheck", "GET /healthcheck.json"),
@@ -431,25 +503,39 @@ class PassboltApiAuthService:
             s.done("success", "Clé publique serveur récupérée", details={"length": len(server_key)})
 
             s = steps[6]; s.start()
-            gpg = self._gpg()
-            s.done("success", "Clé privée locale chargée")
+            gpg_home_info = self._ensure_gpg_home()
+            s.done("success", "Homedir GPG valide", details=gpg_home_info)
+
+            s = steps[7]; s.start()
+            private_key_data = self._read_private_key_source()
+            s.done("success", "Clé privée locale lue", details={"path": self.private_key_path, "size": len(private_key_data)})
+
+            gpg = gnupg.GPG(gnupghome=gpg_home_info["path"])
+
+            s = steps[8]; s.start()
+            imported = self._import_private_key(gpg, private_key_data)
+            s.done("success", "Clé privée importée", details=imported)
+
+            s = steps[9]; s.start()
+            usable = self._assert_private_key_usable(gpg)
+            s.done("success", "Clé privée utilisable", details=usable)
 
             verify_token = secrets.token_urlsafe(32)
             challenge_payload = {"version": "1.0.0", "domain": self.base_url, "verify_token": verify_token, "verify_token_expiry": _now_plus(5)}
-            s = steps[7]; s.start(); s.done("success", "Challenge JWT généré", details={"fields": list(challenge_payload.keys())})
+            s = steps[10]; s.start(); s.done("success", "Challenge JWT généré", details={"fields": list(challenge_payload.keys())})
 
-            s = steps[8]; s.start()
+            s = steps[11]; s.start()
             signed = gpg.sign(json.dumps(challenge_payload), clearsign=False, detach=True, passphrase=self.passphrase)
             if not signed:
                 s.done("error", "Signature challenge JWT échouée")
                 return finalize()
             s.done("success", "Challenge JWT signé")
 
-            s = steps[9]; s.start()
+            s = steps[12]; s.start()
             encrypted = self._encrypt_for_server(gpg, json.dumps({"user_id": self.user_id, "challenge": challenge_payload, "challenge_signature": str(signed)}), server_key)
             s.done("success", "Challenge JWT chiffré", details={"size": len(encrypted)})
 
-            s = steps[10]; s.start()
+            s = steps[13]; s.start()
             status, login_payload, raw, _ = self._request_json("POST", "/auth/jwt/login.json", {"challenge": encrypted, "user_id": self.user_id})
             if status >= 400 or status == 0:
                 s.done("error", "JWT login échoué", http_status=status or None, endpoint="/auth/jwt/login.json", details={"error": _extract_message(login_payload, raw)})
@@ -458,7 +544,7 @@ class PassboltApiAuthService:
 
             token_payload = self._extract_token_payload(gpg, login_payload)
 
-            s = steps[11]; s.start()
+            s = steps[14]; s.start()
             if token_payload.get("verify_token") != verify_token:
                 s.done("error", "verify_token mismatch", details={"sent": verify_token, "received": token_payload.get("verify_token")})
                 return finalize()
@@ -469,32 +555,42 @@ class PassboltApiAuthService:
             self._session.headers.update({"Authorization": f"Bearer {access_token}"})
             s.done("success", "verify_token validé")
 
-            s = steps[12]; s.start()
+            s = steps[15]; s.start()
+            providers = token_payload.get("mfa_providers")
+            if not providers:
+                body = token_payload.get("body") if isinstance(token_payload.get("body"), dict) else {}
+                providers = body.get("mfa_providers")
+            if providers:
+                s.done("warning", "MFA required", details={"providers": providers})
+            else:
+                s.done("success", "MFA non requise")
+
+            s = steps[16]; s.start()
             try:
                 mfa_result = self._verify_mfa_if_required(token_payload)
                 if mfa_result == "not_required":
-                    s.done("success", "MFA non requise")
+                    s.done("success", "MFA TOTP non exécutée (non requise)")
                 else:
                     s.done("success", "MFA TOTP validée")
             except Exception as error:
                 s.done("error", str(error), remediation="Configurer PASSBOLT_API_TOTP_SECRET et vérifier /mfa/verify/totp.json")
                 return finalize()
 
-            s = steps[13]; s.start()
+            s = steps[17]; s.start()
             status, payload, raw, _ = self._request_json("GET", "/auth/is-authenticated.json")
             if status >= 400 or status == 0:
                 s.done("error", "Session non authentifiée", http_status=status or None, endpoint="/auth/is-authenticated.json", details={"error": _extract_message(payload, raw)})
                 return finalize()
             s.done("success", "Session authentifiée", http_status=status, endpoint="/auth/is-authenticated.json")
 
-            s = steps[14]; s.start()
+            s = steps[18]; s.start()
             status, payload, raw, _ = self._request_json("GET", "/groups.json")
             if status >= 400 or status == 0:
                 s.done("error", "Accès /groups.json refusé", http_status=status or None, endpoint="/groups.json", details={"error": _extract_message(payload, raw)}, remediation="Vérifier permissions du compte API")
                 return finalize()
             s.done("success", "/groups.json accessible", http_status=status, endpoint="/groups.json")
 
-            s = steps[15]; s.start()
+            s = steps[19]; s.start()
             status, payload, raw, _ = self._request_json("GET", "/healthcheck.json")
             if status in (401, 403):
                 s.done("warning", "/healthcheck.json inaccessible pour ce rôle", http_status=status, endpoint="/healthcheck.json", details={"error": _extract_message(payload, raw)}, remediation="Utiliser un rôle administrateur si le healthcheck détaillé est requis")
