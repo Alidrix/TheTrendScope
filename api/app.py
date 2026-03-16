@@ -1828,39 +1828,55 @@ def delete_users_stream() -> Any:
     return Response(generate(), mimetype="application/x-ndjson")
 
 
-@app.route("/logs", methods=["GET", "DELETE"])
-def logs_collection() -> Any:
-    batch_uuid, scope, level = _logs_filters_from_request()
-    if request.method == "DELETE":
-        deleted_count = purge_logs(batch_uuid=batch_uuid)
-        _save_live_log(
-            "system",
-            "audit",
-            "Logs purged",
-            batch_uuid=batch_uuid,
-            event_code="logs.purge",
-            payload={"deleted_count": deleted_count},
-        )
-        return jsonify({"status": "ok", "deleted_count": deleted_count, "batch_uuid": batch_uuid})
+def _json_error(message: str, status: int = 500, **extra: Any) -> Any:
+    payload: dict[str, Any] = {"error": message}
+    if extra:
+        payload.update(extra)
+    return jsonify(payload), status
 
-    limit_arg = request.args.get("limit", "200")
+
+@app.route("/logs", methods=["GET", "DELETE"])
+@app.route("/api/logs", methods=["GET", "DELETE"])
+def logs_collection() -> Any:
     try:
-        limit = int(limit_arg)
-    except ValueError:
-        limit = 200
-    items = list_logs(batch_uuid=batch_uuid, scope=scope, level=level, limit=limit)
-    return jsonify({"items": items, "count": len(items), "filters": {"batch_uuid": batch_uuid, "scope": scope, "level": level}})
+        batch_uuid, scope, level = _logs_filters_from_request()
+        if request.method == "DELETE":
+            deleted_count = purge_logs(batch_uuid=batch_uuid)
+            _save_live_log(
+                "system",
+                "audit",
+                "Logs purged",
+                batch_uuid=batch_uuid,
+                event_code="logs.purge",
+                payload={"deleted_count": deleted_count},
+            )
+            return jsonify({"status": "ok", "deleted_count": deleted_count, "batch_uuid": batch_uuid})
+
+        limit_arg = request.args.get("limit", "200")
+        try:
+            limit = int(limit_arg)
+        except ValueError:
+            limit = 200
+        items = list_logs(batch_uuid=batch_uuid, scope=scope, level=level, limit=limit)
+        return jsonify({"items": items, "count": len(items), "filters": {"batch_uuid": batch_uuid, "scope": scope, "level": level}})
+    except Exception as error:
+        return _json_error("Unable to load logs", 500, details=str(error))
 
 
 @app.route("/logs/summary", methods=["GET"])
+@app.route("/api/logs/summary", methods=["GET"])
 def logs_summary() -> Any:
-    batch_uuid, scope, level = _logs_filters_from_request()
-    payload = get_logs_summary(batch_uuid=batch_uuid, scope=scope, level=level)
-    payload["filters"] = {"batch_uuid": batch_uuid, "scope": scope, "level": level}
-    return jsonify(payload)
+    try:
+        batch_uuid, scope, level = _logs_filters_from_request()
+        payload = get_logs_summary(batch_uuid=batch_uuid, scope=scope, level=level)
+        payload["filters"] = {"batch_uuid": batch_uuid, "scope": scope, "level": level}
+        return jsonify(payload)
+    except Exception as error:
+        return _json_error("Unable to load logs summary", 500, details=str(error))
 
 
 @app.route("/logs/export.csv", methods=["GET"])
+@app.route("/api/logs/export.csv", methods=["GET"])
 def logs_export_csv() -> Any:
     batch_uuid, scope, level = _logs_filters_from_request()
     items = list_logs(batch_uuid=batch_uuid, scope=scope, level=level, limit=2000)
@@ -1892,9 +1908,13 @@ def logs_export_csv() -> Any:
 
 
 @app.route("/batches", methods=["GET"])
+@app.route("/api/batches", methods=["GET"])
 
 def batches() -> Any:
-    return jsonify({"items": list_import_batches()})
+    try:
+        return jsonify({"items": list_import_batches()})
+    except Exception as error:
+        return _json_error("Unable to load batches", 500, details=str(error))
 
 
 @app.route("/batches/latest", methods=["GET"])

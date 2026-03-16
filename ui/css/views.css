@@ -124,3 +124,25 @@ th { position: sticky; top: 0; background: var(--color-surface-2); z-index: 1; }
 @media (max-width: 760px) {
   .deletion-status-grid, .deletion-synthesis-grid { grid-template-columns: 1fr; }
 }
+
+.logs-filters-card { border-color: color-mix(in oklab, var(--color-info), transparent 70%); }
+.logs-audit-card { border: 1px solid color-mix(in oklab, var(--color-border), var(--color-brand) 18%); }
+.logs-section-header { display: flex; justify-content: space-between; align-items: flex-end; gap: var(--space-3); margin-bottom: var(--space-3); }
+.logs-section-header h3 { margin: 0; }
+.logs-stream-box { border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-1); padding: var(--space-2); }
+.logs-stream-box.is-error { border-color: color-mix(in oklab, var(--color-danger), transparent 45%); background: color-mix(in oklab, var(--color-danger), transparent 94%); }
+.logs-stream-console {
+  min-height: 420px;
+  max-height: 520px;
+  margin: 0;
+  border: 0;
+  background: linear-gradient(180deg, #111319, #0f1117);
+  color: #d8dee9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  line-height: 1.45;
+}
+#logsTableState .empty-state,
+#auditTab .empty-state,
+#summaryTab .empty-state {
+  background: color-mix(in oklab, var(--color-surface-2), transparent 20%);
+}

@@ -39,7 +39,18 @@ async function runImportFlow() {
     form.append('dry_run_only', $('importDryRun').checked ? 'true' : 'false');
 
     const res = await fetch('/api/import-stream', { method: 'POST', body: form });
-    if (!res.ok || !res.body) throw new Error('Flux import indisponible');
+    if (!res.ok) {
+      let reason = `HTTP ${res.status}`;
+      try {
+        const payload = await res.json();
+        reason = payload?.error || payload?.message || reason;
+      } catch {
+        const txt = await res.text();
+        if (txt) reason = txt.slice(0, 180);
+      }
+      throw new Error(`Flux import indisponible (${reason})`);
+    }
+    if (!res.body) throw new Error('Flux import indisponible (stream non supporté)');
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';

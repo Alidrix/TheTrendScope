@@ -5,6 +5,7 @@ export const state = {
   latestImportResults: [],
   deletePreviewDone: false,
   logsTab: 'summaryTab',
+  logsRowsRaw: [],
   historySearch: '',
   historySort: 'date_desc',
   theme: localStorage.getItem('tts-theme') || 'dark'
