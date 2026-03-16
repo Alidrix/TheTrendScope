@@ -6,6 +6,8 @@ import secrets
 import shutil
 import stat
 import subprocess
+import tempfile
+import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -123,6 +125,9 @@ class PassboltApiAuthService:
         self.private_key_path = (os.getenv("PASSBOLT_API_PRIVATE_KEY_PATH", "/app/keys/admin-private.asc") or "").strip()
         self.gnupg_home = (os.getenv("PASSBOLT_API_GNUPGHOME", "/tmp/gnupg-passbolt") or "").strip()
         self.passphrase = os.getenv("PASSBOLT_API_PASSPHRASE", "")
+        self.signing_fingerprint = (
+            os.getenv("PASSBOLT_API_SIGNING_FINGERPRINT", "F5AA9480ABEFC0BB9B4D5FF73FB3F49967045860") or ""
+        ).strip().replace(" ", "").upper()
         self.verify_tls = os.getenv("PASSBOLT_API_VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
         self.ca_bundle = (os.getenv("PASSBOLT_API_CA_BUNDLE", "") or "").strip()
         self.mfa_provider = (os.getenv("PASSBOLT_API_MFA_PROVIDER", "totp") or "totp").strip().lower()
@@ -133,6 +138,95 @@ class PassboltApiAuthService:
         self._logger = logger
         self._last_verify_token: str | None = None
         self._last_mfa_status = "not_required"
+
+    def _resolve_signing_fingerprint(self, available_fingerprints: list[str]) -> str:
+        normalized_available = [fp.strip().replace(" ", "").upper() for fp in available_fingerprints if fp]
+        if not normalized_available:
+            raise RuntimeError("Aucun fingerprint disponible pour la signature")
+        if self.signing_fingerprint:
+            if self.signing_fingerprint in normalized_available:
+                return self.signing_fingerprint
+            raise RuntimeError(
+                f"Fingerprint de signature introuvable dans le homedir GPG: {self.signing_fingerprint}"
+            )
+        return normalized_available[0]
+
+    def _sign_challenge_jwt(self, challenge_payload: dict[str, Any], gpg_home: str, available_fingerprints: list[str]) -> tuple[str, dict[str, Any]]:
+        fingerprint = self._resolve_signing_fingerprint(available_fingerprints)
+        json_payload = json.dumps(challenge_payload)
+        gpg_path = shutil.which("gpg") or "gpg"
+
+        command = [
+            gpg_path,
+            "--homedir",
+            gpg_home,
+            "--batch",
+            "--yes",
+            "--pinentry-mode",
+            "loopback",
+            "--armor",
+            "--detach-sign",
+            "--local-user",
+            fingerprint,
+        ]
+        if self.passphrase:
+            command.extend(["--passphrase", self.passphrase])
+
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False, suffix=".json") as challenge_file:
+            challenge_file.write(json_payload)
+            challenge_path = challenge_file.name
+
+        sig_path = f"{challenge_path}.asc"
+        command.append(challenge_path)
+
+        details: dict[str, Any] = {
+            "fingerprint": fingerprint,
+            "method": "gpg_subprocess_detach_sign",
+            "batch": True,
+            "pinentry_mode": "loopback",
+            "passphrase_provided": bool(self.passphrase),
+            "gpg_home": gpg_home,
+            "challenge_size": len(json_payload),
+            "challenge_type": "application/json",
+            "returncode": None,
+            "stderr": "",
+            "stdout": "",
+            "output_size": 0,
+            "output_type": "",
+            "python_exception": "",
+        }
+
+        try:
+            proc = subprocess.run(command, capture_output=True, text=True, timeout=max(self.timeout, 30), check=False)
+            details["returncode"] = proc.returncode
+            details["stderr"] = (proc.stderr or "").strip()
+            details["stdout"] = (proc.stdout or "").strip()
+
+            if proc.returncode != 0:
+                raise RuntimeError(details["stderr"] or f"gpg exited with code {proc.returncode}")
+            if not os.path.exists(sig_path):
+                raise RuntimeError("Fichier de signature introuvable après exécution gpg")
+
+            with open(sig_path, "r", encoding="utf-8") as sig_handle:
+                signature = sig_handle.read()
+
+            details["output_size"] = len(signature)
+            details["output_type"] = "armored_pgp_signature"
+            if not signature.strip():
+                raise RuntimeError("Signature vide générée par gpg")
+            return signature, details
+        except Exception as error:
+            details["python_exception"] = f"{type(error).__name__}: {error}"
+            tb = traceback.format_exc().strip()
+            details["traceback"] = tb
+            raise RuntimeError(f"Signature challenge JWT échouée: {error}")
+        finally:
+            for path in (challenge_path, sig_path):
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except OSError:
+                    pass
 
     def check_gpg_binary(self) -> dict[str, Any]:
         gpg_path = shutil.which("gpg")
@@ -292,6 +386,7 @@ class PassboltApiAuthService:
             "private_key": {"path": self.private_key_path, "size": len(private_key_data)},
             "imported": imported,
             "usable": usable,
+            "selected_signing_fingerprint": self._resolve_signing_fingerprint(usable["fingerprints"]),
         }
         return gpg, context
 
@@ -408,12 +503,13 @@ class PassboltApiAuthService:
         }
         self._log("info", "JWT challenge generated")
 
-        signed = gpg.sign(json.dumps(challenge), clearsign=False, detach=True, passphrase=self.passphrase)
-        if not signed:
-            raise RuntimeError("Signature du challenge JWT impossible")
-        self._log("info", "JWT challenge signed")
+        _, context = self._build_gpg_context()
+        signature, sign_details = self._sign_challenge_jwt(challenge, context["gpg_home"]["path"], context["usable"]["fingerprints"])
+        self._log("info", "JWT challenge signed", **sign_details)
 
-        envelope = {"user_id": self.user_id, "challenge": challenge, "challenge_signature": str(signed)}
+        self._log("info", "JWT signing fingerprint selected", fingerprint=sign_details["fingerprint"])
+
+        envelope = {"user_id": self.user_id, "challenge": challenge, "challenge_signature": signature}
         encrypted = self._encrypt_for_server(gpg, json.dumps(envelope), server_public_key)
         self._log("info", "JWT challenge encrypted")
 
@@ -470,8 +566,12 @@ class PassboltApiAuthService:
 
         def finalize() -> dict[str, Any]:
             report["steps"] = [s.to_dict() for s in steps]
+            required_success = {"sign", "encrypt", "jwt_login", "verify_token"}
+            required_statuses = {s.id: s.status for s in steps if s.id in required_success}
             if any(s.status == "error" for s in steps):
                 report["overall_status"] = "error"
+            elif any(required_statuses.get(step) != "success" for step in required_success):
+                report["overall_status"] = "warning"
             elif any(s.status == "warning" for s in steps):
                 report["overall_status"] = "warning"
             else:
@@ -567,14 +667,16 @@ class PassboltApiAuthService:
             s = steps[11]; s.start(); s.done("success", "Challenge JWT généré", details={"fields": list(challenge_payload.keys())})
 
             s = steps[12]; s.start()
-            signed = gpg.sign(json.dumps(challenge_payload), clearsign=False, detach=True, passphrase=self.passphrase)
-            if not signed:
-                s.done("error", "Signature challenge JWT échouée")
+            sign_details: dict[str, Any] = {}
+            try:
+                signature, sign_details = self._sign_challenge_jwt(challenge_payload, gpg_home_info["path"], usable["fingerprints"])
+            except Exception as error:
+                s.done("error", str(error), details=sign_details or {"python_exception": f"{type(error).__name__}: {error}"})
                 return finalize()
-            s.done("success", "Challenge JWT signé")
+            s.done("success", "Challenge JWT signé", details=sign_details)
 
             s = steps[13]; s.start()
-            encrypted = self._encrypt_for_server(gpg, json.dumps({"user_id": self.user_id, "challenge": challenge_payload, "challenge_signature": str(signed)}), server_key)
+            encrypted = self._encrypt_for_server(gpg, json.dumps({"user_id": self.user_id, "challenge": challenge_payload, "challenge_signature": signature}), server_key)
             s.done("success", "Challenge JWT chiffré", details={"size": len(encrypted)})
 
             s = steps[14]; s.start()
