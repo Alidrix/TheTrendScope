@@ -135,6 +135,8 @@ class GpgSigningError(RuntimeError):
 
 
 class PassboltApiAuthService:
+    MANUAL_JWT_DOMAIN = "https://passbolt.karapasse.fr"
+
     def __init__(self, logger: Any | None = None) -> None:
         self.base_url = (os.getenv("PASSBOLT_API_BASE_URL", "") or os.getenv("PASSBOLT_URL", "")).rstrip("/")
         self.auth_mode = (os.getenv("PASSBOLT_API_AUTH_MODE", "jwt") or "jwt").strip().lower()
@@ -495,17 +497,44 @@ class PassboltApiAuthService:
             return ""
         return str(fingerprints[0]).strip().replace(" ", "").upper()
 
+    @staticmethod
+    def _json_type_name(value: Any) -> str:
+        if isinstance(value, bool):
+            return "boolean"
+        if isinstance(value, (int, float)):
+            return "number"
+        if isinstance(value, str):
+            return "string"
+        if value is None:
+            return "null"
+        if isinstance(value, list):
+            return "array"
+        if isinstance(value, dict):
+            return "object"
+        return type(value).__name__
+
+    def _challenge_matches_manual_flow(self, challenge: dict[str, Any]) -> bool:
+        return (
+            challenge.get("version") == "1.0.0"
+            and challenge.get("domain") == self.MANUAL_JWT_DOMAIN
+            and isinstance(challenge.get("verify_token"), str)
+            and self._json_type_name(challenge.get("verify_token_expiry")) == "number"
+        )
+
     def _build_jwt_challenge(self) -> dict[str, Any]:
         verify_token = str(uuid.uuid4())
-        verify_token_expiry = str(_now_plus_epoch_seconds(5))
+        verify_token_expiry = _now_plus_epoch_seconds(5)
         challenge = {
             "version": "1.0.0",
-            "domain": self.base_url,
+            "domain": self.MANUAL_JWT_DOMAIN,
             "verify_token": verify_token,
             "verify_token_expiry": verify_token_expiry,
         }
         self._last_verify_token = verify_token
         return challenge
+
+    def _build_signed_challenge_payload(self, signature: str) -> dict[str, Any]:
+        return {"user_id": self.user_id, "challenge": signature}
 
     def _encrypt_for_server(self, gpg: gnupg.GPG, plaintext: str, server_public_key: str) -> tuple[str, str]:
         imported = gpg.import_keys(server_public_key)
@@ -598,7 +627,7 @@ class PassboltApiAuthService:
 
         self._log("info", "JWT signing fingerprint selected", fingerprint=sign_details["fingerprint"])
 
-        signed_challenge_payload = {"user_id": self.user_id, "challenge": signature}
+        signed_challenge_payload = self._build_signed_challenge_payload(signature)
         encrypted, server_key_fingerprint = self._encrypt_for_server(gpg, json.dumps(signed_challenge_payload), server_public_key)
         self._log("info", "JWT challenge encrypted")
 
@@ -609,10 +638,12 @@ class PassboltApiAuthService:
             version=challenge.get("version"),
             domain=challenge.get("domain"),
             verify_token_expiry=challenge.get("verify_token_expiry"),
-            verify_token_expiry_type=type(challenge.get("verify_token_expiry")).__name__,
+            verify_token_expiry_type=self._json_type_name(challenge.get("verify_token_expiry")),
+            challenge_matches_manual_test=self._challenge_matches_manual_flow(challenge),
             signature_type=sign_details.get("signature_type", "inline"),
             signature_fingerprint=sign_details.get("fingerprint"),
             server_key_fingerprint=server_key_fingerprint,
+            server_key_source="/auth/verify.json",
             final_challenge_size=len(encrypted),
         )
         status, login_payload, raw, _ = self._request_json("POST", "/auth/jwt/login.json", {"challenge": encrypted, "user_id": self.user_id})
@@ -770,7 +801,13 @@ class PassboltApiAuthService:
             s = steps[11]; s.start(); s.done(
                 "success",
                 "Challenge JWT généré",
-                details={"fields": list(challenge_payload.keys()), "verify_token_format": "uuid", "verify_token_expiry_format": "unix_epoch_seconds"},
+                details={
+                    "fields": list(challenge_payload.keys()),
+                    "verify_token_format": "uuid",
+                    "verify_token_expiry_format": "unix_epoch_seconds",
+                    "verify_token_expiry_type": self._json_type_name(challenge_payload.get("verify_token_expiry")),
+                    "challenge_matches_manual_test": self._challenge_matches_manual_flow(challenge_payload),
+                },
             )
 
             s = steps[12]; s.start()
@@ -789,7 +826,7 @@ class PassboltApiAuthService:
             s = steps[13]; s.start()
             encrypted, server_key_fingerprint = self._encrypt_for_server(
                 gpg,
-                json.dumps({"user_id": self.user_id, "challenge": signature}),
+                json.dumps(self._build_signed_challenge_payload(signature)),
                 server_key,
             )
             s.done("success", "Challenge JWT chiffré", details={"size": len(encrypted), "server_key_fingerprint": server_key_fingerprint})
@@ -800,11 +837,13 @@ class PassboltApiAuthService:
                 "user_id_sent": self.user_id,
                 "version_sent": challenge_payload.get("version"),
                 "domain_sent": challenge_payload.get("domain"),
-                "verify_token_expiry_type": type(challenge_payload.get("verify_token_expiry")).__name__,
+                "verify_token_expiry_type": self._json_type_name(challenge_payload.get("verify_token_expiry")),
                 "verify_token_expiry_value": challenge_payload.get("verify_token_expiry"),
                 "signature_type": sign_details.get("signature_type", "inline"),
                 "signature_fingerprint": sign_details.get("fingerprint"),
                 "server_key_fingerprint": server_key_fingerprint,
+                "server_key_source": "/auth/verify.json",
+                "challenge_matches_manual_test": self._challenge_matches_manual_flow(challenge_payload),
                 "challenge_size_sent": len(encrypted),
                 "http_status": status,
                 "response_body": raw,
