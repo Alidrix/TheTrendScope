@@ -497,11 +497,12 @@ class PassboltApiAuthService:
 
     def _build_jwt_challenge(self) -> dict[str, Any]:
         verify_token = str(uuid.uuid4())
+        verify_token_expiry = str(_now_plus_epoch_seconds(5))
         challenge = {
             "version": "1.0.0",
             "domain": self.base_url,
             "verify_token": verify_token,
-            "verify_token_expiry": _now_plus_epoch_seconds(5),
+            "verify_token_expiry": verify_token_expiry,
         }
         self._last_verify_token = verify_token
         return challenge
@@ -608,6 +609,7 @@ class PassboltApiAuthService:
             version=challenge.get("version"),
             domain=challenge.get("domain"),
             verify_token_expiry=challenge.get("verify_token_expiry"),
+            verify_token_expiry_type=type(challenge.get("verify_token_expiry")).__name__,
             signature_type=sign_details.get("signature_type", "inline"),
             signature_fingerprint=sign_details.get("fingerprint"),
             server_key_fingerprint=server_key_fingerprint,
@@ -798,7 +800,8 @@ class PassboltApiAuthService:
                 "user_id_sent": self.user_id,
                 "version_sent": challenge_payload.get("version"),
                 "domain_sent": challenge_payload.get("domain"),
-                "verify_token_expiry_sent": challenge_payload.get("verify_token_expiry"),
+                "verify_token_expiry_type": type(challenge_payload.get("verify_token_expiry")).__name__,
+                "verify_token_expiry_value": challenge_payload.get("verify_token_expiry"),
                 "signature_type": sign_details.get("signature_type", "inline"),
                 "signature_fingerprint": sign_details.get("fingerprint"),
                 "server_key_fingerprint": server_key_fingerprint,
