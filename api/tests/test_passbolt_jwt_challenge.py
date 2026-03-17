@@ -3,6 +3,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -42,6 +43,38 @@ class PassboltJwtChallengeRegressionTests(unittest.TestCase):
         serialized = json.dumps(payload)
         self.assertIn('"challenge"', serialized)
         self.assertIn('"user_id"', serialized)
+
+    def test_jwt_login_payload_contract_uses_json_and_writes_dumps(self) -> None:
+        service = self._service()
+        service.base_url = "https://example.passbolt.test"
+        encrypted = "-----BEGIN PGP MESSAGE-----\nabc\n-----END PGP MESSAGE-----\n"
+
+        sent = {}
+
+        def fake_prepare(request):
+            sent["json"] = request.json
+            sent["data"] = request.data
+            sent["url"] = request.url
+            return SimpleNamespace(body=json.dumps(request.json), headers={})
+
+        def fake_send(prepared, timeout, verify):
+            sent["timeout"] = timeout
+            sent["verify"] = verify
+            return SimpleNamespace(text='{"body":"ok"}', status_code=200, json=lambda: {"body": "ok"})
+
+        service._session.prepare_request = fake_prepare
+        service._session.send = fake_send
+
+        status, payload, _, _, diagnostics = service._send_jwt_login_request(encrypted)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload.get("body"), "ok")
+        self.assertEqual(sent["url"], "https://example.passbolt.test/auth/jwt/login.json")
+        self.assertEqual(sent["json"]["user_id"], "11111111-2222-3333-4444-555555555555")
+        self.assertEqual(sent["json"]["challenge"], encrypted)
+        self.assertFalse(sent["data"])
+        self.assertTrue(diagnostics["uses_json_parameter"])
+        self.assertFalse(diagnostics["uses_data_parameter"])
 
 
 if __name__ == "__main__":

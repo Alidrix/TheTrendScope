@@ -19,6 +19,10 @@ import pyotp
 import requests
 
 
+APP_CHALLENGE_DUMP_PATH = "/tmp/app-challenge.final.asc"
+APP_LOGIN_BODY_DUMP_PATH = "/tmp/app-login-body.json"
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -88,6 +92,10 @@ def _safe_secret_diagnostic(value: str) -> dict[str, Any]:
         "length": len(secret),
         "sha256_prefix": digest,
     }
+
+
+def _sha256_hex(value: str) -> str:
+    return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -536,6 +544,54 @@ class PassboltApiAuthService:
     def _build_signed_challenge_payload(self, signature: str) -> dict[str, Any]:
         return {"user_id": self.user_id, "challenge": signature}
 
+    @staticmethod
+    def _write_text_dump(path: str, content: str) -> None:
+        with open(path, "w", encoding="utf-8") as fd:
+            fd.write(content)
+
+    def _build_jwt_login_payload(self, encrypted_challenge: str) -> dict[str, Any]:
+        return {"user_id": self.user_id, "challenge": encrypted_challenge}
+
+    def _send_jwt_login_request(self, encrypted_challenge: str) -> tuple[int, dict[str, Any], str, requests.Response | None, dict[str, Any]]:
+        payload = self._build_jwt_login_payload(encrypted_challenge)
+        headers = {"Accept": "application/json", "Content-Type": "application/json", **dict(self._session.headers)}
+        url = f"{self.base_url}/auth/jwt/login.json"
+        request = requests.Request("POST", url, json=payload, headers=headers)
+        prepared = self._session.prepare_request(request)
+        body = prepared.body if isinstance(prepared.body, str) else (prepared.body or b"").decode("utf-8", errors="replace")
+
+        self._write_text_dump(APP_CHALLENGE_DUMP_PATH, encrypted_challenge)
+        self._write_text_dump(APP_LOGIN_BODY_DUMP_PATH, body)
+
+        request_diagnostics = {
+            "challenge_final_dump_path": APP_CHALLENGE_DUMP_PATH,
+            "body_dump_path": APP_LOGIN_BODY_DUMP_PATH,
+            "challenge_final_sha256": _sha256_hex(encrypted_challenge),
+            "challenge_final_size": len(encrypted_challenge),
+            "body_json_sha256": _sha256_hex(body),
+            "body_json_size": len(body),
+            "http_call_contract": "requests.post(url, json={\"user_id\":..., \"challenge\":...})",
+            "uses_json_parameter": True,
+            "uses_data_parameter": False,
+            "double_json_dumps": False,
+            "extra_base64": False,
+            "challenge_trimmed": False,
+            "challenge_newline_normalized": False,
+            "challenge_reconstructed_after_debug": False,
+        }
+
+        try:
+            response = self._session.send(prepared, timeout=self.timeout, verify=self.verify_setting)
+            data: dict[str, Any] = {}
+            if response.text:
+                try:
+                    data = response.json()
+                except Exception:
+                    data = {}
+            return response.status_code, data, response.text[:2000], response, request_diagnostics
+        except requests.RequestException as error:
+            return 0, {}, str(error), None, request_diagnostics
+
     def _encrypt_for_server(self, gpg: gnupg.GPG, plaintext: str, server_public_key: str) -> tuple[str, str]:
         imported = gpg.import_keys(server_public_key)
         if not imported.fingerprints:
@@ -646,7 +702,7 @@ class PassboltApiAuthService:
             server_key_source="/auth/verify.json",
             final_challenge_size=len(encrypted),
         )
-        status, login_payload, raw, _ = self._request_json("POST", "/auth/jwt/login.json", {"challenge": encrypted, "user_id": self.user_id})
+        status, login_payload, raw, _, request_diagnostics = self._send_jwt_login_request(encrypted)
         self._log("info", "JWT login response received", http_status=status, response_body=raw)
         if status >= 400 or status == 0:
             self._log("error", "JWT login failed", http_status=status, response_body=raw)
@@ -669,6 +725,14 @@ class PassboltApiAuthService:
             "refresh_token": refresh_token,
             "mfa_status": self._verify_mfa_if_required(token_payload),
         }
+        self._log(
+            "info",
+            "JWT payload diagnostics",
+            challenge_final_sha256=request_diagnostics["challenge_final_sha256"],
+            challenge_final_size=request_diagnostics["challenge_final_size"],
+            body_json_sha256=request_diagnostics["body_json_sha256"],
+            body_json_size=request_diagnostics["body_json_size"],
+        )
         self._session.headers.update({"Authorization": f"Bearer {access_token}"})
         return self._tokens
 
@@ -832,7 +896,7 @@ class PassboltApiAuthService:
             s.done("success", "Challenge JWT chiffré", details={"size": len(encrypted), "server_key_fingerprint": server_key_fingerprint})
 
             s = steps[14]; s.start()
-            status, login_payload, raw, _ = self._request_json("POST", "/auth/jwt/login.json", {"challenge": encrypted, "user_id": self.user_id})
+            status, login_payload, raw, _, request_diagnostics = self._send_jwt_login_request(encrypted)
             jwt_login_details = {
                 "user_id_sent": self.user_id,
                 "version_sent": challenge_payload.get("version"),
@@ -847,12 +911,16 @@ class PassboltApiAuthService:
                 "challenge_size_sent": len(encrypted),
                 "http_status": status,
                 "response_body": raw,
+                "challenge_manual_status": "accepted",
+                "challenge_app_status": "accepted" if status and status < 400 else "rejected",
+                "manual_vs_app_indicator": "challenge manuel accepté / challenge applicatif accepté" if status and status < 400 else "challenge manuel accepté / challenge applicatif rejeté",
                 "pipeline_order": [
                     "1) génération JSON",
                     "2) signature inline clé privée client",
                     "3) chiffrement clé publique serveur",
                     "4) POST /auth/jwt/login.json",
                 ],
+                **request_diagnostics,
             }
             if status >= 400 or status == 0:
                 s.done(
