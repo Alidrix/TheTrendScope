@@ -20,8 +20,9 @@ services:
       - PASSBOLT_API_AUTH_MODE=${PASSBOLT_API_AUTH_MODE:-jwt}
       - PASSBOLT_API_USER_ID=${PASSBOLT_API_USER_ID:-}
       - PASSBOLT_API_PRIVATE_KEY_PATH=${PASSBOLT_API_PRIVATE_KEY_PATH:-/app/keys/admin-private.asc}
-      # Keep this key-only passthrough to preserve a literal passphrase value,
-      # including consecutive '$' characters, without Compose interpolation.
+      # IMPORTANT: keep this key-only passthrough (no '=...') so Docker Compose
+      # forwards the environment variable as-is. This avoids `$` interpolation
+      # side effects when the passphrase contains consecutive dollar characters.
       - PASSBOLT_API_PASSPHRASE
       - PASSBOLT_API_VERIFY_TLS=${PASSBOLT_API_VERIFY_TLS:-true}
       - PASSBOLT_API_CA_BUNDLE=${PASSBOLT_API_CA_BUNDLE:-}

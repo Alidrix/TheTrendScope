@@ -42,6 +42,27 @@ Variables principales :
 - `PASSBOLT_API_MFA_PROVIDER`
 - `PASSBOLT_API_TOTP_SECRET`
 
+⚠️ **Important Docker Compose et `$` dans la passphrase**
+
+- Dans `docker-compose.yml`, la variable est injectée en **clé seule** (`- PASSBOLT_API_PASSPHRASE`) pour transmettre la valeur brute depuis l'environnement sans interpolation Compose.
+- Si vous choisissez malgré tout une forme inline (`PASSBOLT_API_PASSPHRASE=...`), il faut échapper chaque dollar en `$$` sinon Compose interprète `$` et peut altérer la valeur.
+
+Diagnostic sûr (sans fuite du secret) :
+- présence/absence de la variable,
+- longueur,
+- préfixe de hash SHA-256 tronqué.
+
+Vérification runtime recommandée :
+
+```bash
+python3 - <<'PY'
+import os
+p = os.environ.get("PASSBOLT_API_PASSPHRASE", "")
+print("repr:", repr(p))
+print("len :", len(p))
+PY
+```
+
 Validation au démarrage :
 - message explicite si variable obligatoire manquante,
 - message explicite si clé privée introuvable,

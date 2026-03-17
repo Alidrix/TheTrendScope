@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import io
 import json
 import os
@@ -120,6 +121,26 @@ def validate_startup_configuration() -> list[str]:
 
 for _issue in validate_startup_configuration():
     print(f"[WARNING] Startup config validation: {_issue}")
+
+
+def _safe_secret_diagnostic(value: str) -> dict[str, Any]:
+    secret = value or ""
+    digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:12] if secret else ""
+    return {
+        "present": bool(secret),
+        "length": len(secret),
+        "sha256_prefix": digest,
+    }
+
+
+def log_passphrase_diagnostic() -> None:
+    diag = _safe_secret_diagnostic(os.getenv("PASSBOLT_API_PASSPHRASE", ""))
+    print(
+        "[INFO] PASSBOLT_API_PASSPHRASE diagnostic "
+        f"present={diag['present']} length={diag['length']} sha256_prefix={diag['sha256_prefix']}"
+    )
+
+log_passphrase_diagnostic()
 
 def _sanitize_value(name: str, value: str) -> str:
     cleaned = (value or "").strip()
