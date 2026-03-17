@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import secrets
 import shutil
@@ -77,6 +78,16 @@ def parse_dry_run_details(payload: dict[str, Any]) -> dict[str, Any]:
         if key in body:
             result[key] = body.get(key)
     return result
+
+
+def _safe_secret_diagnostic(value: str) -> dict[str, Any]:
+    secret = value or ""
+    digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:12] if secret else ""
+    return {
+        "present": bool(secret),
+        "length": len(secret),
+        "sha256_prefix": digest,
+    }
 
 
 @dataclass
@@ -320,6 +331,7 @@ class PassboltApiAuthService:
     def config_status(self) -> dict[str, Any]:
         ca_bundle_exists = bool(self.ca_bundle and os.path.exists(self.ca_bundle))
         ca_bundle_readable = bool(ca_bundle_exists and os.access(self.ca_bundle, os.R_OK))
+        passphrase_diag = _safe_secret_diagnostic(self.passphrase)
         checks = {
             "base_url": bool(self.base_url),
             "auth_mode": self.auth_mode == "jwt",
@@ -328,7 +340,9 @@ class PassboltApiAuthService:
             "private_key_exists": bool(self.private_key_path and os.path.exists(self.private_key_path)),
             "private_key_readable": bool(self.private_key_path and os.path.exists(self.private_key_path) and os.access(self.private_key_path, os.R_OK)),
             "gnupg_home": bool(self.gnupg_home),
-            "passphrase": bool(self.passphrase),
+            "passphrase": passphrase_diag["present"],
+            "passphrase_length": passphrase_diag["length"],
+            "passphrase_sha256_prefix": passphrase_diag["sha256_prefix"],
             "mfa_provider": self.mfa_provider == "totp",
             "totp_secret": bool(self.totp_secret),
             "ca_bundle_configured": bool(self.ca_bundle),
