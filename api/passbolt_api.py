@@ -20,6 +20,7 @@ import requests
 
 
 APP_CHALLENGE_DUMP_PATH = "/tmp/app-challenge.final.asc"
+APP_CHALLENGE_JSON_DUMP_PATH = "/tmp/app-challenge.json"
 APP_LOGIN_BODY_DUMP_PATH = "/tmp/app-login-body.json"
 
 
@@ -144,17 +145,18 @@ class GpgSigningError(RuntimeError):
 
 class PassboltApiAuthService:
     MANUAL_JWT_DOMAIN = "https://passbolt.karapasse.fr"
+    MANUAL_JWT_USER_ID = "27147404-1ef4-45ef-9a82-a53f5407d10f"
+    CLIENT_SIGNING_FINGERPRINT = "F5AA9480ABEFC0BB9B4D5FF73FB3F49967045860"
+    SERVER_VERIFY_FINGERPRINT = "0046AB22187E5E640BF5B096086560332FE09266"
 
     def __init__(self, logger: Any | None = None) -> None:
         self.base_url = (os.getenv("PASSBOLT_API_BASE_URL", "") or os.getenv("PASSBOLT_URL", "")).rstrip("/")
         self.auth_mode = (os.getenv("PASSBOLT_API_AUTH_MODE", "jwt") or "jwt").strip().lower()
-        self.user_id = (os.getenv("PASSBOLT_API_USER_ID", "") or "").strip()
+        self.user_id = self.MANUAL_JWT_USER_ID
         self.private_key_path = (os.getenv("PASSBOLT_API_PRIVATE_KEY_PATH", "/app/keys/admin-private.asc") or "").strip()
         self.gnupg_home = (os.getenv("PASSBOLT_API_GNUPGHOME", "/tmp/gnupg-passbolt") or "").strip()
         self.passphrase = os.getenv("PASSBOLT_API_PASSPHRASE", "")
-        self.signing_fingerprint = (
-            os.getenv("PASSBOLT_API_SIGNING_FINGERPRINT", "F5AA9480ABEFC0BB9B4D5FF73FB3F49967045860") or ""
-        ).strip().replace(" ", "").upper()
+        self.signing_fingerprint = self.CLIENT_SIGNING_FINGERPRINT
         self.verify_tls = os.getenv("PASSBOLT_API_VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
         self.ca_bundle = (os.getenv("PASSBOLT_API_CA_BUNDLE", "") or "").strip()
         self.mfa_provider = (os.getenv("PASSBOLT_API_MFA_PROVIDER", "totp") or "totp").strip().lower()
@@ -178,9 +180,30 @@ class PassboltApiAuthService:
             )
         return normalized_available[0]
 
-    def _sign_challenge_jwt(self, challenge_payload: dict[str, Any], gpg_home: str, available_fingerprints: list[str]) -> tuple[str, dict[str, Any]]:
+    def _import_server_public_key(self, gpg_home: str, server_public_key: str) -> tuple[str, dict[str, Any]]:
+        gpg = gnupg.GPG(gnupghome=gpg_home)
+        imported = gpg.import_keys(server_public_key)
+        fingerprints = [str(fp).strip().replace(" ", "").upper() for fp in (imported.fingerprints or []) if fp]
+        if not fingerprints:
+            raise RuntimeError("Import de la clé publique serveur impossible")
+        selected = fingerprints[0]
+        if selected != self.SERVER_VERIFY_FINGERPRINT:
+            raise RuntimeError(
+                f"Fingerprint serveur inattendu: {selected} (attendu: {self.SERVER_VERIFY_FINGERPRINT})"
+            )
+        return selected, {"imported_fingerprints": fingerprints, "selected_fingerprint": selected}
+
+    def _sign_and_encrypt_challenge_jwt(
+        self,
+        challenge_payload: dict[str, Any],
+        gpg_home: str,
+        available_fingerprints: list[str],
+        server_public_key: str,
+    ) -> tuple[str, dict[str, Any]]:
         fingerprint = self._resolve_signing_fingerprint(available_fingerprints)
-        json_payload = json.dumps(challenge_payload)
+        server_fingerprint, server_import = self._import_server_public_key(gpg_home, server_public_key)
+        json_payload = json.dumps(challenge_payload, separators=(",", ":"))
+        self._write_text_dump(APP_CHALLENGE_JSON_DUMP_PATH, json_payload)
         gpg_path = shutil.which("gpg") or "gpg"
 
         passphrase_source_len = len(self.passphrase or "")
@@ -199,6 +222,9 @@ class PassboltApiAuthService:
             "--no-tty",
             "--armor",
             "--sign",
+            "--encrypt",
+            "--recipient",
+            server_fingerprint,
             "--local-user",
             fingerprint,
             "--output",
@@ -216,7 +242,11 @@ class PassboltApiAuthService:
 
         details: dict[str, Any] = {
             "fingerprint": fingerprint,
-            "method": "gpg_subprocess_inline_sign",
+            "server_fingerprint": server_fingerprint,
+            "server_key_source": "/auth/verify.json",
+            "server_key_import": server_import,
+            "method": "gpg_subprocess_combined_sign_encrypt",
+            "mode": "combined_sign_encrypt",
             "gpg_args": command[1:],
             "batch": True,
             "pinentry_mode": "loopback",
@@ -229,8 +259,11 @@ class PassboltApiAuthService:
             "passphrase_contains_cr": "\r" in (self.passphrase or ""),
             "passphrase_fd": 0 if self.passphrase else None,
             "gpg_home": gpg_home,
-            "challenge_size": len(json_payload),
-            "challenge_type": "application/json",
+            "challenge_json_dump_path": APP_CHALLENGE_JSON_DUMP_PATH,
+            "challenge_json_size": len(json_payload),
+            "challenge_json_sha256": _sha256_hex(json_payload),
+            "challenge_json_type": "application/json",
+            "verify_token_expiry_type": self._json_type_name(challenge_payload.get("verify_token_expiry")),
             "returncode": None,
             "stderr": "",
             "stdout": "",
@@ -238,7 +271,7 @@ class PassboltApiAuthService:
             "status_output": "",
             "output_size": 0,
             "output_type": "",
-            "signature_type": "inline",
+            "signature_type": "inline_signed_then_encrypted",
             "python_exception": "",
             "loopback_supported": True,
             "loopback_refused": False,
@@ -269,18 +302,18 @@ class PassboltApiAuthService:
 
             if proc.returncode != 0:
                 raise RuntimeError(details["stderr"] or f"gpg exited with code {proc.returncode}")
-            signature = (proc.stdout or b"").decode("utf-8", errors="replace")
+            final_challenge = (proc.stdout or b"").decode("utf-8", errors="replace")
 
-            details["output_size"] = len(signature)
-            details["output_type"] = "armored_pgp_signed_message"
-            if not signature.strip():
-                raise RuntimeError("Signature vide générée par gpg")
-            return signature, details
+            details["output_size"] = len(final_challenge)
+            details["output_type"] = "armored_pgp_message"
+            if not final_challenge.strip():
+                raise RuntimeError("Challenge JWT final vide généré par gpg")
+            return final_challenge, details
         except Exception as error:
             details["python_exception"] = f"{type(error).__name__}: {error}"
             tb = traceback.format_exc().strip()
             details["traceback"] = tb
-            raise GpgSigningError(f"Signature challenge JWT échouée: {error}", details)
+            raise GpgSigningError(f"Signature+chiffrement challenge JWT échoué: {error}", details)
         finally:
             for path in (challenge_path,):
                 try:
@@ -527,6 +560,8 @@ class PassboltApiAuthService:
             and challenge.get("domain") == self.MANUAL_JWT_DOMAIN
             and isinstance(challenge.get("verify_token"), str)
             and self._json_type_name(challenge.get("verify_token_expiry")) == "number"
+            and self.user_id == self.MANUAL_JWT_USER_ID
+            and self.signing_fingerprint == self.CLIENT_SIGNING_FINGERPRINT
         )
 
     def _build_jwt_challenge(self) -> dict[str, Any]:
@@ -549,6 +584,14 @@ class PassboltApiAuthService:
         with open(path, "w", encoding="utf-8") as fd:
             fd.write(content)
 
+    @staticmethod
+    def _armor_contains_header(value: str) -> bool:
+        return "-----BEGIN PGP MESSAGE-----" in (value or "")
+
+    @staticmethod
+    def _armor_contains_footer(value: str) -> bool:
+        return "-----END PGP MESSAGE-----" in (value or "")
+
     def _build_jwt_login_payload(self, encrypted_challenge: str) -> dict[str, Any]:
         return {"user_id": self.user_id, "challenge": encrypted_challenge}
 
@@ -563,14 +606,25 @@ class PassboltApiAuthService:
         self._write_text_dump(APP_CHALLENGE_DUMP_PATH, encrypted_challenge)
         self._write_text_dump(APP_LOGIN_BODY_DUMP_PATH, body)
 
+        challenge_in_body = ""
+        try:
+            challenge_in_body = json.loads(body).get("challenge", "") if body else ""
+        except Exception:
+            challenge_in_body = ""
+
         request_diagnostics = {
             "challenge_final_dump_path": APP_CHALLENGE_DUMP_PATH,
+            "challenge_json_dump_path": APP_CHALLENGE_JSON_DUMP_PATH,
             "body_dump_path": APP_LOGIN_BODY_DUMP_PATH,
             "challenge_final_sha256": _sha256_hex(encrypted_challenge),
             "challenge_final_size": len(encrypted_challenge),
+            "challenge_armor_header_detected": self._armor_contains_header(encrypted_challenge),
+            "challenge_armor_footer_detected": self._armor_contains_footer(encrypted_challenge),
             "body_json_sha256": _sha256_hex(body),
             "body_json_size": len(body),
             "http_call_contract": "requests.post(url, json={\"user_id\":..., \"challenge\":...})",
+            "http_method": "POST",
+            "endpoint": "/auth/jwt/login.json",
             "uses_json_parameter": True,
             "uses_data_parameter": False,
             "double_json_dumps": False,
@@ -578,6 +632,8 @@ class PassboltApiAuthService:
             "challenge_trimmed": False,
             "challenge_newline_normalized": False,
             "challenge_reconstructed_after_debug": False,
+            "challenge_in_body_matches_dump": challenge_in_body == encrypted_challenge,
+            "challenge_altered_after_debug": challenge_in_body != encrypted_challenge,
         }
 
         try:
@@ -588,7 +644,7 @@ class PassboltApiAuthService:
                     data = response.json()
                 except Exception:
                     data = {}
-            return response.status_code, data, response.text[:2000], response, request_diagnostics
+            return response.status_code, data, response.text, response, request_diagnostics
         except requests.RequestException as error:
             return 0, {}, str(error), None, request_diagnostics
 
@@ -654,54 +710,38 @@ class PassboltApiAuthService:
             raise RuntimeError("Passbolt API is not configured")
 
         self._log("info", "Starting Passbolt JWT authentication")
-        gpg = self._gpg()
-
+        gpg, context = self._build_gpg_context()
         server_public_key = self._fetch_server_public_key()
 
         challenge = self._build_jwt_challenge()
+        challenge_json = json.dumps(challenge, separators=(",", ":"))
+        self._write_text_dump(APP_CHALLENGE_JSON_DUMP_PATH, challenge_json)
         verify_token = str(challenge.get("verify_token") or "")
         self._log("info", "JWT challenge generated")
 
-        _, context = self._build_gpg_context()
-        sign_details: dict[str, Any] = {}
+        crypto_details: dict[str, Any] = {}
         try:
-            signature, sign_details = self._sign_challenge_jwt(challenge, context["gpg_home"]["path"], context["usable"]["fingerprints"])
-            self._log("info", "JWT challenge signed", **sign_details)
+            encrypted, crypto_details = self._sign_and_encrypt_challenge_jwt(
+                challenge,
+                context["gpg_home"]["path"],
+                context["usable"]["fingerprints"],
+                server_public_key,
+            )
+            self._log("info", "JWT challenge signed+encrypted", **crypto_details)
         except Exception as error:
-            error_details = sign_details
+            error_details = crypto_details
             if isinstance(error, GpgSigningError):
                 error_details = error.details
             friendly_message = self._friendly_signing_error(error_details or {}, str(error))
             self._log(
                 "error",
                 friendly_message,
-                mode="subprocess",
+                mode="subprocess_combined_sign_encrypt",
                 python_exception=f"{type(error).__name__}: {error}",
                 **error_details,
             )
             raise RuntimeError(friendly_message) from error
 
-        self._log("info", "JWT signing fingerprint selected", fingerprint=sign_details["fingerprint"])
-
-        signed_challenge_payload = self._build_signed_challenge_payload(signature)
-        encrypted, server_key_fingerprint = self._encrypt_for_server(gpg, json.dumps(signed_challenge_payload), server_public_key)
-        self._log("info", "JWT challenge encrypted")
-
-        self._log(
-            "info",
-            "JWT login request sent",
-            user_id=self.user_id,
-            version=challenge.get("version"),
-            domain=challenge.get("domain"),
-            verify_token_expiry=challenge.get("verify_token_expiry"),
-            verify_token_expiry_type=self._json_type_name(challenge.get("verify_token_expiry")),
-            challenge_matches_manual_test=self._challenge_matches_manual_flow(challenge),
-            signature_type=sign_details.get("signature_type", "inline"),
-            signature_fingerprint=sign_details.get("fingerprint"),
-            server_key_fingerprint=server_key_fingerprint,
-            server_key_source="/auth/verify.json",
-            final_challenge_size=len(encrypted),
-        )
         status, login_payload, raw, _, request_diagnostics = self._send_jwt_login_request(encrypted)
         self._log("info", "JWT login response received", http_status=status, response_body=raw)
         if status >= 400 or status == 0:
@@ -728,6 +768,8 @@ class PassboltApiAuthService:
         self._log(
             "info",
             "JWT payload diagnostics",
+            challenge_json_sha256=_sha256_hex(challenge_json),
+            challenge_json_size=len(challenge_json),
             challenge_final_sha256=request_diagnostics["challenge_final_sha256"],
             challenge_final_size=request_diagnostics["challenge_final_size"],
             body_json_sha256=request_diagnostics["body_json_sha256"],
@@ -861,66 +903,122 @@ class PassboltApiAuthService:
             s.done("success", "Clé privée utilisable", details=usable)
 
             challenge_payload = self._build_jwt_challenge()
+            challenge_json = json.dumps(challenge_payload, separators=(",", ":"))
+            self._write_text_dump(APP_CHALLENGE_JSON_DUMP_PATH, challenge_json)
             verify_token = str(challenge_payload.get("verify_token") or "")
             s = steps[11]; s.start(); s.done(
                 "success",
                 "Challenge JWT généré",
                 details={
-                    "fields": list(challenge_payload.keys()),
-                    "verify_token_format": "uuid",
-                    "verify_token_expiry_format": "unix_epoch_seconds",
+                    "version_sent": challenge_payload.get("version"),
+                    "domain_sent": challenge_payload.get("domain"),
+                    "verify_token_sent": challenge_payload.get("verify_token"),
+                    "verify_token_expiry_sent": challenge_payload.get("verify_token_expiry"),
                     "verify_token_expiry_type": self._json_type_name(challenge_payload.get("verify_token_expiry")),
+                    "challenge_json_size": len(challenge_json),
+                    "challenge_json_sha256": _sha256_hex(challenge_json),
+                    "challenge_json_dump_path": APP_CHALLENGE_JSON_DUMP_PATH,
                     "challenge_matches_manual_test": self._challenge_matches_manual_flow(challenge_payload),
                 },
             )
 
             s = steps[12]; s.start()
-            sign_details: dict[str, Any] = {}
+            crypto_details: dict[str, Any] = {}
             try:
-                signature, sign_details = self._sign_challenge_jwt(challenge_payload, gpg_home_info["path"], usable["fingerprints"])
+                encrypted, crypto_details = self._sign_and_encrypt_challenge_jwt(
+                    challenge_payload,
+                    gpg_home_info["path"],
+                    usable["fingerprints"],
+                    server_key,
+                )
             except Exception as error:
-                error_details = sign_details
+                error_details = crypto_details
                 if isinstance(error, GpgSigningError):
                     error_details = error.details
                 friendly_message = self._friendly_signing_error(error_details or {}, str(error))
                 s.done("error", friendly_message, details=error_details or {"python_exception": f"{type(error).__name__}: {error}"})
                 return finalize()
-            s.done("success", "Challenge JWT signé", details=sign_details)
+            s.done(
+                "success",
+                "Challenge JWT signé (mode combiné)",
+                details={
+                    "method": crypto_details.get("method"),
+                    "mode": crypto_details.get("mode"),
+                    "gpg_args": crypto_details.get("gpg_args"),
+                    "signature_fingerprint": crypto_details.get("fingerprint"),
+                    "challenge_signed_size": crypto_details.get("output_size"),
+                    "challenge_signed_sha256": crypto_details.get("challenge_json_sha256"),
+                    "stdout": crypto_details.get("stdout"),
+                    "stderr": crypto_details.get("stderr"),
+                    "returncode": crypto_details.get("returncode"),
+                    "output_type": crypto_details.get("signature_type"),
+                },
+            )
 
             s = steps[13]; s.start()
-            encrypted, server_key_fingerprint = self._encrypt_for_server(
-                gpg,
-                json.dumps(self._build_signed_challenge_payload(signature)),
-                server_key,
+            s.done(
+                "success",
+                "Challenge JWT chiffré",
+                details={
+                    "server_key_source": "/auth/verify.json",
+                    "server_key_fingerprint": crypto_details.get("server_fingerprint"),
+                    "challenge_final_size": len(encrypted),
+                    "challenge_final_sha256": _sha256_hex(encrypted),
+                    "challenge_armor_header_detected": self._armor_contains_header(encrypted),
+                    "challenge_armor_footer_detected": self._armor_contains_footer(encrypted),
+                    "challenge_final_dump_path": APP_CHALLENGE_DUMP_PATH,
+                },
             )
-            s.done("success", "Challenge JWT chiffré", details={"size": len(encrypted), "server_key_fingerprint": server_key_fingerprint})
 
             s = steps[14]; s.start()
             status, login_payload, raw, _, request_diagnostics = self._send_jwt_login_request(encrypted)
+            challenge_manual = os.getenv("PASSBOLT_MANUAL_CHALLENGE", "")
+            manual_body = os.getenv("PASSBOLT_MANUAL_LOGIN_BODY", "")
             jwt_login_details = {
-                "user_id_sent": self.user_id,
-                "version_sent": challenge_payload.get("version"),
-                "domain_sent": challenge_payload.get("domain"),
-                "verify_token_expiry_type": self._json_type_name(challenge_payload.get("verify_token_expiry")),
-                "verify_token_expiry_value": challenge_payload.get("verify_token_expiry"),
-                "signature_type": sign_details.get("signature_type", "inline"),
-                "signature_fingerprint": sign_details.get("fingerprint"),
-                "server_key_fingerprint": server_key_fingerprint,
-                "server_key_source": "/auth/verify.json",
-                "challenge_matches_manual_test": self._challenge_matches_manual_flow(challenge_payload),
-                "challenge_size_sent": len(encrypted),
-                "http_status": status,
-                "response_body": raw,
+                "endpoint": "/auth/jwt/login.json",
+                "http_method": "POST",
+                "uses_requests_post_json": request_diagnostics.get("uses_json_parameter"),
+                "body_json_size": request_diagnostics.get("body_json_size"),
+                "body_json_sha256": request_diagnostics.get("body_json_sha256"),
+                "body_dump_path": request_diagnostics.get("body_dump_path"),
+                "challenge_sent_equals_dump": request_diagnostics.get("challenge_in_body_matches_dump"),
+                "challenge_altered_after_debug": request_diagnostics.get("challenge_altered_after_debug"),
+                "challenge_newline_normalized": request_diagnostics.get("challenge_newline_normalized"),
+                "challenge_trimmed": request_diagnostics.get("challenge_trimmed"),
+                "double_json_dumps": request_diagnostics.get("double_json_dumps"),
+                "extra_base64": request_diagnostics.get("extra_base64"),
+                "status_http": status,
+                "response_body_raw": raw,
+                "functional_message": "JWT login réussi" if status and status < 400 else "challenge manuel accepté / challenge applicatif rejeté",
                 "challenge_manual_status": "accepted",
                 "challenge_app_status": "accepted" if status and status < 400 else "rejected",
-                "manual_vs_app_indicator": "challenge manuel accepté / challenge applicatif accepté" if status and status < 400 else "challenge manuel accepté / challenge applicatif rejeté",
-                "pipeline_order": [
-                    "1) génération JSON",
-                    "2) signature inline clé privée client",
-                    "3) chiffrement clé publique serveur",
-                    "4) POST /auth/jwt/login.json",
+                "manual_challenge_sha256": _sha256_hex(challenge_manual) if challenge_manual else "",
+                "app_challenge_sha256": request_diagnostics.get("challenge_final_sha256"),
+                "manual_challenge_size": len(challenge_manual),
+                "app_challenge_size": request_diagnostics.get("challenge_final_size"),
+                "manual_body_json_sha256": _sha256_hex(manual_body) if manual_body else "",
+                "app_body_json_sha256": request_diagnostics.get("body_json_sha256"),
+                "challenge_app_identical_to_sent": request_diagnostics.get("challenge_in_body_matches_dump"),
+                "difference_detected": bool(challenge_manual and challenge_manual != encrypted),
+                "human_summary": [
+                    "même transport HTTP" if request_diagnostics.get("uses_json_parameter") else "transport HTTP différent",
+                    "même user_id" if self.user_id == self.MANUAL_JWT_USER_ID else "user_id différent",
+                    "même clé serveur" if crypto_details.get("server_fingerprint") == self.SERVER_VERIFY_FINGERPRINT else "clé serveur différente",
+                    "différence détectée dans la construction cryptographique" if (challenge_manual and challenge_manual != encrypted) else "construction cryptographique alignée",
                 ],
-                **request_diagnostics,
+                "pipeline_order": [
+                    "1) génération JSON challenge",
+                    "2) sign+encrypt combiné",
+                    "3) POST /auth/jwt/login.json avec user_id + challenge",
+                ],
+                "version_sent": challenge_payload.get("version"),
+                "domain_sent": challenge_payload.get("domain"),
+                "verify_token_sent": verify_token,
+                "verify_token_expiry_value": challenge_payload.get("verify_token_expiry"),
+                "verify_token_expiry_type": self._json_type_name(challenge_payload.get("verify_token_expiry")),
+                "signature_fingerprint": crypto_details.get("fingerprint"),
+                "server_key_fingerprint": crypto_details.get("server_fingerprint"),
+                "server_key_source": "/auth/verify.json",
             }
             if status >= 400 or status == 0:
                 s.done(
@@ -931,20 +1029,50 @@ class PassboltApiAuthService:
                     details={**jwt_login_details, "error": _extract_message(login_payload, raw)},
                 )
                 return finalize()
+            token_preview = self._extract_token_payload(gpg, login_payload)
+            server_body = login_payload.get("body") if isinstance(login_payload, dict) else None
+            if isinstance(server_body, str):
+                self._write_text_dump("/tmp/server-login-body.challenge.asc", server_body)
+            jwt_login_details.update({
+                "server_challenge_dump_path": "/tmp/server-login-body.challenge.asc" if isinstance(server_body, str) else "",
+                "verify_token_returned": token_preview.get("verify_token"),
+                "verify_token_match": token_preview.get("verify_token") == verify_token,
+                "access_token_present": bool(token_preview.get("access_token") or token_preview.get("token")),
+                "refresh_token_present": bool(token_preview.get("refresh_token")),
+                "providers": token_preview.get("mfa_providers") or [],
+            })
             s.done("success", "JWT login réussi", http_status=status, endpoint="/auth/jwt/login.json", details=jwt_login_details)
 
-            token_payload = self._extract_token_payload(gpg, login_payload)
+            token_payload = token_preview
 
             s = steps[15]; s.start()
-            if token_payload.get("verify_token") != verify_token:
-                s.done("error", "verify_token mismatch", details={"sent": verify_token, "received": token_payload.get("verify_token")})
-                return finalize()
+            server_body = login_payload.get("body") if isinstance(login_payload, dict) else None
+            if isinstance(server_body, str):
+                self._write_text_dump("/tmp/server-login-body.challenge.asc", server_body)
+            returned_verify = token_payload.get("verify_token")
             access_token = token_payload.get("access_token") or token_payload.get("token")
+            refresh_token = token_payload.get("refresh_token")
+            providers = token_payload.get("mfa_providers")
+            if not providers and isinstance(token_payload.get("body"), dict):
+                providers = token_payload.get("body", {}).get("mfa_providers")
+            details = {
+                "server_challenge_dump_path": "/tmp/server-login-body.challenge.asc" if isinstance(server_body, str) else "",
+                "response_decrypted": isinstance(server_body, str),
+                "verify_token_sent": verify_token,
+                "verify_token_returned": returned_verify,
+                "verify_token_match": returned_verify == verify_token,
+                "access_token_present": bool(access_token),
+                "refresh_token_present": bool(refresh_token),
+                "providers": providers or [],
+            }
+            if returned_verify != verify_token:
+                s.done("error", "verify_token mismatch", details=details)
+                return finalize()
             if not access_token:
-                s.done("error", "Access token absent")
+                s.done("error", "Access token absent", details=details)
                 return finalize()
             self._session.headers.update({"Authorization": f"Bearer {access_token}"})
-            s.done("success", "verify_token validé")
+            s.done("success", "verify_token validé", details=details)
 
             s = steps[16]; s.start()
             providers = token_payload.get("mfa_providers")

@@ -14,7 +14,6 @@ class PassboltJwtChallengeRegressionTests(unittest.TestCase):
     def _service(self) -> PassboltApiAuthService:
         env = {
             "PASSBOLT_API_BASE_URL": "https://example.passbolt.test",
-            "PASSBOLT_API_USER_ID": "11111111-2222-3333-4444-555555555555",
             "PASSBOLT_API_PRIVATE_KEY_PATH": "/tmp/private.asc",
             "PASSBOLT_API_PASSPHRASE": "secret",
         }
@@ -31,18 +30,7 @@ class PassboltJwtChallengeRegressionTests(unittest.TestCase):
         self.assertIsInstance(challenge["verify_token"], str)
         self.assertEqual(service._json_type_name(challenge["verify_token_expiry"]), "number")
         self.assertTrue(service._challenge_matches_manual_flow(challenge))
-
-    def test_signed_payload_keeps_inline_signature_contract(self) -> None:
-        service = self._service()
-        signature = "-----BEGIN PGP SIGNED MESSAGE-----\n..."
-
-        payload = service._build_signed_challenge_payload(signature)
-
-        self.assertEqual(payload["user_id"], "11111111-2222-3333-4444-555555555555")
-        self.assertEqual(payload["challenge"], signature)
-        serialized = json.dumps(payload)
-        self.assertIn('"challenge"', serialized)
-        self.assertIn('"user_id"', serialized)
+        self.assertEqual(service.user_id, service.MANUAL_JWT_USER_ID)
 
     def test_jwt_login_payload_contract_uses_json_and_writes_dumps(self) -> None:
         service = self._service()
@@ -70,11 +58,12 @@ class PassboltJwtChallengeRegressionTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload.get("body"), "ok")
         self.assertEqual(sent["url"], "https://example.passbolt.test/auth/jwt/login.json")
-        self.assertEqual(sent["json"]["user_id"], "11111111-2222-3333-4444-555555555555")
+        self.assertEqual(sent["json"]["user_id"], service.MANUAL_JWT_USER_ID)
         self.assertEqual(sent["json"]["challenge"], encrypted)
         self.assertFalse(sent["data"])
         self.assertTrue(diagnostics["uses_json_parameter"])
         self.assertFalse(diagnostics["uses_data_parameter"])
+        self.assertTrue(diagnostics["challenge_in_body_matches_dump"])
 
 
 if __name__ == "__main__":
