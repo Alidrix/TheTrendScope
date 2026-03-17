@@ -117,6 +117,12 @@ class DiagnosticStep:
         }
 
 
+class GpgSigningError(RuntimeError):
+    def __init__(self, message: str, details: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.details = details
+
+
 class PassboltApiAuthService:
     def __init__(self, logger: Any | None = None) -> None:
         self.base_url = (os.getenv("PASSBOLT_API_BASE_URL", "") or os.getenv("PASSBOLT_URL", "")).rstrip("/")
@@ -156,6 +162,7 @@ class PassboltApiAuthService:
         json_payload = json.dumps(challenge_payload)
         gpg_path = shutil.which("gpg") or "gpg"
 
+        passphrase_path = ""
         command = [
             gpg_path,
             "--homedir",
@@ -172,10 +179,13 @@ class PassboltApiAuthService:
             "--local-user",
             fingerprint,
         ]
-        stdin_data: bytes | None = None
+
         if self.passphrase:
-            command.extend(["--passphrase-fd", "0"])
-            stdin_data = f"{self.passphrase}\n".encode("utf-8")
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False, suffix=".pass") as passphrase_file:
+                passphrase_file.write(self.passphrase)
+                passphrase_path = passphrase_file.name
+            os.chmod(passphrase_path, 0o600)
+            command.extend(["--passphrase-file", passphrase_path])
 
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False, suffix=".json") as challenge_file:
             challenge_file.write(json_payload)
@@ -191,7 +201,8 @@ class PassboltApiAuthService:
             "batch": True,
             "pinentry_mode": "loopback",
             "passphrase_provided": bool(self.passphrase),
-            "passphrase_delivery": "passphrase-fd" if self.passphrase else "none",
+            "passphrase_delivery": "passphrase-file" if self.passphrase else "none",
+            "passphrase_file": bool(passphrase_path),
             "gpg_home": gpg_home,
             "challenge_size": len(json_payload),
             "challenge_type": "application/json",
@@ -210,7 +221,6 @@ class PassboltApiAuthService:
         try:
             proc = subprocess.run(
                 command,
-                input=stdin_data,
                 capture_output=True,
                 timeout=max(self.timeout, 30),
                 check=False,
@@ -228,7 +238,7 @@ class PassboltApiAuthService:
                 details["remediation"] = "Vérifier gpg-agent.conf (allow-loopback-pinentry) puis recharger gpg-agent"
             elif "bad passphrase" in lower_stderr and "loopback" in lower_stderr:
                 details["loopback_refused"] = True
-                details["remediation"] = "Le mode loopback semble refusé: vérifier gpg-agent et la passphrase transmise en --passphrase-fd"
+                details["remediation"] = "Le mode loopback semble refusé: vérifier gpg-agent et la transmission applicative de la passphrase"
 
             if proc.returncode != 0:
                 raise RuntimeError(details["stderr"] or f"gpg exited with code {proc.returncode}")
@@ -247,9 +257,9 @@ class PassboltApiAuthService:
             details["python_exception"] = f"{type(error).__name__}: {error}"
             tb = traceback.format_exc().strip()
             details["traceback"] = tb
-            raise RuntimeError(f"Signature challenge JWT échouée: {error}")
+            raise GpgSigningError(f"Signature challenge JWT échouée: {error}", details)
         finally:
-            for path in (challenge_path, sig_path):
+            for path in (challenge_path, sig_path, passphrase_path):
                 try:
                     if os.path.exists(path):
                         os.remove(path)
@@ -532,8 +542,22 @@ class PassboltApiAuthService:
         self._log("info", "JWT challenge generated")
 
         _, context = self._build_gpg_context()
-        signature, sign_details = self._sign_challenge_jwt(challenge, context["gpg_home"]["path"], context["usable"]["fingerprints"])
-        self._log("info", "JWT challenge signed", **sign_details)
+        sign_details: dict[str, Any] = {}
+        try:
+            signature, sign_details = self._sign_challenge_jwt(challenge, context["gpg_home"]["path"], context["usable"]["fingerprints"])
+            self._log("info", "JWT challenge signed", **sign_details)
+        except Exception as error:
+            error_details = sign_details
+            if isinstance(error, GpgSigningError):
+                error_details = error.details
+            self._log(
+                "error",
+                "JWT challenge signing failed",
+                mode="subprocess",
+                python_exception=f"{type(error).__name__}: {error}",
+                **error_details,
+            )
+            raise
 
         self._log("info", "JWT signing fingerprint selected", fingerprint=sign_details["fingerprint"])
 
@@ -699,7 +723,10 @@ class PassboltApiAuthService:
             try:
                 signature, sign_details = self._sign_challenge_jwt(challenge_payload, gpg_home_info["path"], usable["fingerprints"])
             except Exception as error:
-                s.done("error", str(error), details=sign_details or {"python_exception": f"{type(error).__name__}: {error}"})
+                error_details = sign_details
+                if isinstance(error, GpgSigningError):
+                    error_details = error.details
+                s.done("error", str(error), details=error_details or {"python_exception": f"{type(error).__name__}: {error}"})
                 return finalize()
             s.done("success", "Challenge JWT signé", details=sign_details)
 
