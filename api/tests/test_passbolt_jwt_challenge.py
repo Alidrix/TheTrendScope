@@ -65,6 +65,27 @@ class PassboltJwtChallengeRegressionTests(unittest.TestCase):
         self.assertFalse(diagnostics["uses_data_parameter"])
         self.assertTrue(diagnostics["challenge_in_body_matches_dump"])
 
+    def test_sign_encrypt_uses_trust_model_always(self) -> None:
+        service = self._service()
+
+        with patch.object(service, '_import_server_public_key', return_value=(service.SERVER_VERIFY_FINGERPRINT, {'imported_fingerprints': [service.SERVER_VERIFY_FINGERPRINT], 'selected_fingerprint': service.SERVER_VERIFY_FINGERPRINT})), \
+             patch.object(service, '_resolve_signing_fingerprint', return_value=service.CLIENT_SIGNING_FINGERPRINT), \
+             patch('passbolt_api.subprocess.run') as run_mock:
+            run_mock.return_value = SimpleNamespace(returncode=0, stdout=b'-----BEGIN PGP MESSAGE-----\nabc\n-----END PGP MESSAGE-----\n', stderr=b'')
+
+            _, details = service._sign_and_encrypt_challenge_jwt(
+                {'version': '1.0.0', 'domain': service.MANUAL_JWT_DOMAIN, 'verify_token': 'x', 'verify_token_expiry': 1},
+                '/tmp',
+                [service.CLIENT_SIGNING_FINGERPRINT],
+                'PUBLIC_KEY',
+            )
+
+        args = run_mock.call_args.kwargs['args'] if 'args' in run_mock.call_args.kwargs else run_mock.call_args.args[0]
+        self.assertIn('--trust-model', args)
+        trust_index = args.index('--trust-model')
+        self.assertEqual(args[trust_index + 1], 'always')
+        self.assertEqual(details['trust_model_used'], 'always')
+
 
 if __name__ == "__main__":
     unittest.main()

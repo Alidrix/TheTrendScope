@@ -215,6 +215,8 @@ class PassboltApiAuthService:
             gpg_home,
             "--batch",
             "--yes",
+            "--trust-model",
+            "always",
             "--pinentry-mode",
             "loopback",
             "--status-fd",
@@ -247,6 +249,7 @@ class PassboltApiAuthService:
             "server_key_import": server_import,
             "method": "gpg_subprocess_combined_sign_encrypt",
             "mode": "combined_sign_encrypt",
+            "trust_model_used": "always",
             "gpg_args": command[1:],
             "batch": True,
             "pinentry_mode": "loopback",
@@ -275,6 +278,8 @@ class PassboltApiAuthService:
             "python_exception": "",
             "loopback_supported": True,
             "loopback_refused": False,
+            "recipient_trust_error": False,
+            "trust_error_message": "",
         }
 
         try:
@@ -299,6 +304,9 @@ class PassboltApiAuthService:
             elif "bad passphrase" in lower_stderr and "loopback" in lower_stderr:
                 details["loopback_refused"] = True
                 details["remediation"] = "Le mode loopback semble refusé: vérifier gpg-agent et la transmission applicative de la passphrase"
+            if "there is no assurance this key belongs to the named user" in lower_stderr or "unusable public key" in lower_stderr:
+                details["recipient_trust_error"] = True
+                details["trust_error_message"] = "clé serveur importée mais refusée par GPG faute de trust"
 
             if proc.returncode != 0:
                 raise RuntimeError(details["stderr"] or f"gpg exited with code {proc.returncode}")
@@ -306,6 +314,9 @@ class PassboltApiAuthService:
 
             details["output_size"] = len(final_challenge)
             details["output_type"] = "armored_pgp_message"
+            details["challenge_final_sha256"] = _sha256_hex(final_challenge)
+            details["challenge_armor_header_detected"] = self._armor_contains_header(final_challenge)
+            details["challenge_armor_footer_detected"] = self._armor_contains_footer(final_challenge)
             if not final_challenge.strip():
                 raise RuntimeError("Challenge JWT final vide généré par gpg")
             return final_challenge, details
@@ -326,6 +337,10 @@ class PassboltApiAuthService:
     def _friendly_signing_error(details: dict[str, Any], fallback: str) -> str:
         stderr = str(details.get("stderr") or "").lower()
         status_output = str(details.get("status_output") or "").lower()
+        if details.get("recipient_trust_error"):
+            return "clé serveur importée mais refusée par GPG faute de trust"
+        if "there is no assurance this key belongs to the named user" in stderr or "unusable public key" in stderr:
+            return "clé serveur importée mais refusée par GPG faute de trust"
         if "bad passphrase" in stderr or "bad passphrase" in status_output:
             return "Déverrouillage de la clé privée échoué lors de la signature applicative"
         return fallback
@@ -944,24 +959,39 @@ class PassboltApiAuthService:
                 details={
                     "method": crypto_details.get("method"),
                     "mode": crypto_details.get("mode"),
+                    "trust_model_used": crypto_details.get("trust_model_used"),
                     "gpg_args": crypto_details.get("gpg_args"),
                     "signature_fingerprint": crypto_details.get("fingerprint"),
+                    "recipient_fingerprint": crypto_details.get("server_fingerprint"),
+                    "source_recipient_key": "/auth/verify.json",
                     "challenge_signed_size": crypto_details.get("output_size"),
-                    "challenge_signed_sha256": crypto_details.get("challenge_json_sha256"),
+                    "challenge_signed_sha256": crypto_details.get("challenge_final_sha256"),
+                    "challenge_armor_header_detected": crypto_details.get("challenge_armor_header_detected"),
+                    "challenge_armor_footer_detected": crypto_details.get("challenge_armor_footer_detected"),
                     "stdout": crypto_details.get("stdout"),
                     "stderr": crypto_details.get("stderr"),
                     "returncode": crypto_details.get("returncode"),
                     "output_type": crypto_details.get("signature_type"),
+                    "recipient_trust_error": crypto_details.get("recipient_trust_error"),
+                    "trust_error_message": crypto_details.get("trust_error_message"),
                 },
             )
 
             s = steps[13]; s.start()
+            imported_fingerprints = (crypto_details.get("server_key_import") or {}).get("imported_fingerprints") or []
+            selected_fingerprint = (crypto_details.get("server_key_import") or {}).get("selected_fingerprint")
             s.done(
                 "success",
                 "Challenge JWT chiffré",
                 details={
+                    "fingerprint_attendu": self.SERVER_VERIFY_FINGERPRINT,
+                    "fingerprint_importe": imported_fingerprints,
+                    "fingerprint_selectionne": selected_fingerprint,
+                    "key_imported": bool(imported_fingerprints),
+                    "key_selected": bool(selected_fingerprint),
                     "server_key_source": "/auth/verify.json",
                     "server_key_fingerprint": crypto_details.get("server_fingerprint"),
+                    "recipient_trust_error": crypto_details.get("recipient_trust_error"),
                     "challenge_final_size": len(encrypted),
                     "challenge_final_sha256": _sha256_hex(encrypted),
                     "challenge_armor_header_detected": self._armor_contains_header(encrypted),
@@ -999,12 +1029,14 @@ class PassboltApiAuthService:
                 "manual_body_json_sha256": _sha256_hex(manual_body) if manual_body else "",
                 "app_body_json_sha256": request_diagnostics.get("body_json_sha256"),
                 "challenge_app_identical_to_sent": request_diagnostics.get("challenge_in_body_matches_dump"),
+                "same_http_body": bool(manual_body) and (_sha256_hex(manual_body) == request_diagnostics.get("body_json_sha256")),
+                "same_final_challenge": bool(challenge_manual) and (challenge_manual == encrypted),
                 "difference_detected": bool(challenge_manual and challenge_manual != encrypted),
                 "human_summary": [
                     "même transport HTTP" if request_diagnostics.get("uses_json_parameter") else "transport HTTP différent",
                     "même user_id" if self.user_id == self.MANUAL_JWT_USER_ID else "user_id différent",
                     "même clé serveur" if crypto_details.get("server_fingerprint") == self.SERVER_VERIFY_FINGERPRINT else "clé serveur différente",
-                    "différence détectée dans la construction cryptographique" if (challenge_manual and challenge_manual != encrypted) else "construction cryptographique alignée",
+                    "différence détectée dans la confiance GPG" if crypto_details.get("recipient_trust_error") else ("différence détectée dans la construction cryptographique" if (challenge_manual and challenge_manual != encrypted) else "construction cryptographique alignée"),
                 ],
                 "pipeline_order": [
                     "1) génération JSON challenge",
@@ -1019,6 +1051,25 @@ class PassboltApiAuthService:
                 "signature_fingerprint": crypto_details.get("fingerprint"),
                 "server_key_fingerprint": crypto_details.get("server_fingerprint"),
                 "server_key_source": "/auth/verify.json",
+                "challenge_json_size": len(challenge_json),
+                "challenge_json_sha256": _sha256_hex(challenge_json),
+                "challenge_json_dump_path": APP_CHALLENGE_JSON_DUMP_PATH,
+                "method": crypto_details.get("method"),
+                "mode": crypto_details.get("mode"),
+                "gpg_args": crypto_details.get("gpg_args"),
+                "trust_model_used": crypto_details.get("trust_model_used"),
+                "challenge_armor_header_detected": request_diagnostics.get("challenge_armor_header_detected"),
+                "challenge_armor_footer_detected": request_diagnostics.get("challenge_armor_footer_detected"),
+                "gpg_stdout": crypto_details.get("stdout"),
+                "gpg_stderr": crypto_details.get("stderr"),
+                "gpg_returncode": crypto_details.get("returncode"),
+                "fingerprint_attendu": self.SERVER_VERIFY_FINGERPRINT,
+                "fingerprint_importe": (crypto_details.get("server_key_import") or {}).get("imported_fingerprints") or [],
+                "fingerprint_selectionne": (crypto_details.get("server_key_import") or {}).get("selected_fingerprint"),
+                "key_imported": bool((crypto_details.get("server_key_import") or {}).get("imported_fingerprints") or []),
+                "key_selected": bool((crypto_details.get("server_key_import") or {}).get("selected_fingerprint")),
+                "recipient_trust_error": crypto_details.get("recipient_trust_error"),
+                "trust_error_message": crypto_details.get("trust_error_message"),
             }
             if status >= 400 or status == 0:
                 s.done(

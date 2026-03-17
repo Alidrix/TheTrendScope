@@ -24,9 +24,11 @@ function kv(label, value) {
 function renderJwtDeepDiagnostics(step) {
   if (step.id !== 'jwt_login') return '';
   const d = step.details || {};
-  const summaryText = d.status_http && d.status_http < 400
-    ? 'Crypto locale OK · Transport HTTP OK · Challenge applicatif accepté par Passbolt'
-    : 'Crypto locale OK · Transport HTTP OK · Challenge applicatif rejeté par Passbolt';
+  const summaryText = d.recipient_trust_error
+    ? 'Clé serveur refusée par GPG faute de trust · Flow applicatif rejeté avant login JWT'
+    : (d.status_http && d.status_http < 400
+      ? 'Crypto locale OK · Flow JWT applicatif accepté (login 200)'
+      : 'Crypto locale OK · Flow manuel accepté / flow applicatif rejeté');
 
   return `
     <div class="health-deep-grid mt-2">
@@ -44,21 +46,32 @@ function renderJwtDeepDiagnostics(step) {
       <section class="health-subsection">
         <h4>B. Signature</h4>
         ${kv('méthode', d.method)}
-        ${kv('mode', d.mode)}
+        ${kv('mode exact', d.mode)}
         ${kv('arguments GPG', d.gpg_args)}
+        ${kv('trust_model_used', d.trust_model_used)}
         ${kv('fingerprint signature', d.signature_fingerprint)}
-        ${kv('taille challenge signé', d.challenge_signed_size)}
-        ${kv('sha256 challenge signé', d.challenge_signed_sha256)}
-        ${kv('stdout GPG', d.stdout)}
-        ${kv('stderr GPG', d.stderr)}
-        ${kv('code retour', d.returncode)}
-        ${kv('type sortie', d.output_type)}
+        ${kv('fingerprint destinataire serveur', d.server_key_fingerprint)}
+        ${kv('source clé destinataire', d.server_key_source)}
+        ${kv('taille challenge final', d.app_challenge_size)}
+        ${kv('sha256 challenge final', d.app_challenge_sha256)}
+        ${kv('header armor détecté', d.challenge_armor_header_detected)}
+        ${kv('footer armor détecté', d.challenge_armor_footer_detected)}
+        ${kv('stdout GPG', d.gpg_stdout || d.stdout)}
+        ${kv('stderr GPG', d.gpg_stderr || d.stderr)}
+        ${kv('code retour', d.gpg_returncode ?? d.returncode)}
+        ${kv('erreur trust recipient', d.recipient_trust_error)}
+        ${kv('message erreur trust', d.trust_error_message)}
       </section>
       <section class="health-subsection">
         <h4>C. Chiffrement</h4>
+        ${kv('fingerprint attendu', d.fingerprint_attendu)}
+        ${kv('fingerprint importé', d.fingerprint_importe)}
+        ${kv('fingerprint sélectionné', d.fingerprint_selectionne)}
+        ${kv('clé importée', d.key_imported)}
+        ${kv('clé sélectionnée', d.key_selected)}
         ${kv('source clé serveur', d.server_key_source)}
         ${kv('fingerprint serveur', d.server_key_fingerprint)}
-        ${kv('confirmé /auth/verify.json', d.server_key_source === '/auth/verify.json' ? 'oui' : 'non')}
+        ${kv('erreur recipient trust', d.recipient_trust_error)}
         ${kv('taille challenge final', d.app_challenge_size)}
         ${kv('sha256 challenge final', d.app_challenge_sha256)}
         ${kv('header armor détecté', d.challenge_armor_header_detected)}
@@ -101,6 +114,8 @@ function renderJwtDeepDiagnostics(step) {
         ${kv('taille challenge applicatif', d.app_challenge_size)}
         ${kv('body JSON manuel sha256', d.manual_body_json_sha256)}
         ${kv('body JSON applicatif sha256', d.app_body_json_sha256)}
+        ${kv('même body HTTP ?', d.same_http_body)}
+        ${kv('même challenge final ?', d.same_final_challenge)}
         ${kv('challenge applicatif identique au challenge envoyé', d.challenge_app_identical_to_sent)}
         ${kv('différence détectée', d.difference_detected)}
         ${kv('résumé humain', d.human_summary)}
