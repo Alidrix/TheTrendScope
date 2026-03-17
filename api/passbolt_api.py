@@ -188,9 +188,11 @@ class PassboltApiAuthService:
             "2",
             "--no-tty",
             "--armor",
-            "--detach-sign",
+            "--sign",
             "--local-user",
             fingerprint,
+            "--output",
+            "-",
         ]
 
         if self.passphrase:
@@ -200,12 +202,11 @@ class PassboltApiAuthService:
             challenge_file.write(json_payload)
             challenge_path = challenge_file.name
 
-        sig_path = f"{challenge_path}.asc"
         command.append(challenge_path)
 
         details: dict[str, Any] = {
             "fingerprint": fingerprint,
-            "method": "gpg_subprocess_detach_sign",
+            "method": "gpg_subprocess_inline_sign",
             "gpg_args": command[1:],
             "batch": True,
             "pinentry_mode": "loopback",
@@ -227,6 +228,7 @@ class PassboltApiAuthService:
             "status_output": "",
             "output_size": 0,
             "output_type": "",
+            "signature_type": "inline",
             "python_exception": "",
             "loopback_supported": True,
             "loopback_refused": False,
@@ -257,14 +259,10 @@ class PassboltApiAuthService:
 
             if proc.returncode != 0:
                 raise RuntimeError(details["stderr"] or f"gpg exited with code {proc.returncode}")
-            if not os.path.exists(sig_path):
-                raise RuntimeError("Fichier de signature introuvable après exécution gpg")
-
-            with open(sig_path, "r", encoding="utf-8") as sig_handle:
-                signature = sig_handle.read()
+            signature = (proc.stdout or b"").decode("utf-8", errors="replace")
 
             details["output_size"] = len(signature)
-            details["output_type"] = "armored_pgp_signature"
+            details["output_type"] = "armored_pgp_signed_message"
             if not signature.strip():
                 raise RuntimeError("Signature vide générée par gpg")
             return signature, details
@@ -274,7 +272,7 @@ class PassboltApiAuthService:
             details["traceback"] = tb
             raise GpgSigningError(f"Signature challenge JWT échouée: {error}", details)
         finally:
-            for path in (challenge_path, sig_path):
+            for path in (challenge_path,):
                 try:
                     if os.path.exists(path):
                         os.remove(path)
@@ -599,16 +597,18 @@ class PassboltApiAuthService:
 
         self._log("info", "JWT signing fingerprint selected", fingerprint=sign_details["fingerprint"])
 
-        envelope = {"user_id": self.user_id, "challenge": challenge, "challenge_signature": signature}
-        encrypted, server_key_fingerprint = self._encrypt_for_server(gpg, json.dumps(envelope), server_public_key)
+        signed_challenge_payload = {"user_id": self.user_id, "challenge": signature}
+        encrypted, server_key_fingerprint = self._encrypt_for_server(gpg, json.dumps(signed_challenge_payload), server_public_key)
         self._log("info", "JWT challenge encrypted")
 
         self._log(
             "info",
             "JWT login request sent",
             user_id=self.user_id,
+            version=challenge.get("version"),
             domain=challenge.get("domain"),
             verify_token_expiry=challenge.get("verify_token_expiry"),
+            signature_type=sign_details.get("signature_type", "inline"),
             signature_fingerprint=sign_details.get("fingerprint"),
             server_key_fingerprint=server_key_fingerprint,
             final_challenge_size=len(encrypted),
@@ -787,7 +787,7 @@ class PassboltApiAuthService:
             s = steps[13]; s.start()
             encrypted, server_key_fingerprint = self._encrypt_for_server(
                 gpg,
-                json.dumps({"user_id": self.user_id, "challenge": challenge_payload, "challenge_signature": signature}),
+                json.dumps({"user_id": self.user_id, "challenge": signature}),
                 server_key,
             )
             s.done("success", "Challenge JWT chiffré", details={"size": len(encrypted), "server_key_fingerprint": server_key_fingerprint})
@@ -796,8 +796,10 @@ class PassboltApiAuthService:
             status, login_payload, raw, _ = self._request_json("POST", "/auth/jwt/login.json", {"challenge": encrypted, "user_id": self.user_id})
             jwt_login_details = {
                 "user_id_sent": self.user_id,
+                "version_sent": challenge_payload.get("version"),
                 "domain_sent": challenge_payload.get("domain"),
                 "verify_token_expiry_sent": challenge_payload.get("verify_token_expiry"),
+                "signature_type": sign_details.get("signature_type", "inline"),
                 "signature_fingerprint": sign_details.get("fingerprint"),
                 "server_key_fingerprint": server_key_fingerprint,
                 "challenge_size_sent": len(encrypted),
@@ -805,7 +807,7 @@ class PassboltApiAuthService:
                 "response_body": raw,
                 "pipeline_order": [
                     "1) génération JSON",
-                    "2) signature clé privée client",
+                    "2) signature inline clé privée client",
                     "3) chiffrement clé publique serveur",
                     "4) POST /auth/jwt/login.json",
                 ],

@@ -80,10 +80,15 @@ export async function refreshDashboard() {
     const cliStatus = deriveCliStatus(health);
     const apiHealth = deriveApiHealthStatus(deleteCfg);
 
+    const jwtRejected = deleteCfg?.jwt_login_status === 'error';
+    const deleteApiDetail = jwtRejected
+      ? (deleteCfg?.message || 'Crypto locale OK / Login JWT rejeté par Passbolt')
+      : (deleteCfg?.groups_status ? `Groupes: ${deleteCfg.groups_status}` : (deleteCfg?.message || 'Diagnostic requis'));
+
     const healthCards = [
       { label: 'API Import', ...apiImport },
       { label: 'Création utilisateur via CLI', ...cliStatus },
-      { label: 'Groupes / Suppression API', status: apiHealth.status, detail: deleteCfg?.groups_status ? `Groupes: ${deleteCfg.groups_status}` : (deleteCfg?.message || 'Diagnostic requis') },
+      { label: 'Groupes / Suppression API', status: apiHealth.status, detail: deleteApiDetail },
       { label: 'Base locale', status: 'configured', detail: `${dbSummary?.batches_count || 0} batch` },
       { label: 'Santé API globale', ...apiHealth }
     ];
