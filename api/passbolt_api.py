@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import hashlib
 import os
-import secrets
 import shutil
 import stat
 import subprocess
 import tempfile
 import traceback
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -23,8 +23,8 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _now_plus(minutes: int) -> str:
-    return (_utc_now() + timedelta(minutes=minutes)).isoformat()
+def _now_plus_epoch_seconds(minutes: int) -> int:
+    return int((_utc_now() + timedelta(minutes=minutes)).timestamp())
 
 
 def _extract_message(payload: Any, fallback: str = "") -> str:
@@ -491,14 +491,31 @@ class PassboltApiAuthService:
         self._log("info", "Server public key retrieved")
         return key_resp.text
 
-    def _encrypt_for_server(self, gpg: gnupg.GPG, plaintext: str, server_public_key: str) -> str:
+    @staticmethod
+    def _extract_primary_fingerprint(fingerprints: list[str] | None) -> str:
+        if not fingerprints:
+            return ""
+        return str(fingerprints[0]).strip().replace(" ", "").upper()
+
+    def _build_jwt_challenge(self) -> dict[str, Any]:
+        verify_token = str(uuid.uuid4())
+        challenge = {
+            "version": "1.0.0",
+            "domain": self.base_url,
+            "verify_token": verify_token,
+            "verify_token_expiry": _now_plus_epoch_seconds(5),
+        }
+        self._last_verify_token = verify_token
+        return challenge
+
+    def _encrypt_for_server(self, gpg: gnupg.GPG, plaintext: str, server_public_key: str) -> tuple[str, str]:
         imported = gpg.import_keys(server_public_key)
         if not imported.fingerprints:
             raise RuntimeError("Import de la clé publique serveur impossible")
         encrypted = gpg.encrypt(plaintext, recipients=imported.fingerprints, always_trust=True)
         if not encrypted.ok:
             raise RuntimeError(f"Chiffrement challenge échoué: {encrypted.status}")
-        return str(encrypted)
+        return str(encrypted), self._extract_primary_fingerprint(imported.fingerprints)
 
     def _decrypt_payload(self, gpg: gnupg.GPG, encrypted: str) -> str:
         decrypted = gpg.decrypt(encrypted, passphrase=self.passphrase)
@@ -557,14 +574,8 @@ class PassboltApiAuthService:
 
         server_public_key = self._fetch_server_public_key()
 
-        verify_token = secrets.token_urlsafe(32)
-        self._last_verify_token = verify_token
-        challenge = {
-            "version": "1.0.0",
-            "domain": self.base_url,
-            "verify_token": verify_token,
-            "verify_token_expiry": _now_plus(5),
-        }
+        challenge = self._build_jwt_challenge()
+        verify_token = str(challenge.get("verify_token") or "")
         self._log("info", "JWT challenge generated")
 
         _, context = self._build_gpg_context()
@@ -589,12 +600,23 @@ class PassboltApiAuthService:
         self._log("info", "JWT signing fingerprint selected", fingerprint=sign_details["fingerprint"])
 
         envelope = {"user_id": self.user_id, "challenge": challenge, "challenge_signature": signature}
-        encrypted = self._encrypt_for_server(gpg, json.dumps(envelope), server_public_key)
+        encrypted, server_key_fingerprint = self._encrypt_for_server(gpg, json.dumps(envelope), server_public_key)
         self._log("info", "JWT challenge encrypted")
 
-        self._log("info", "JWT login request sent")
+        self._log(
+            "info",
+            "JWT login request sent",
+            user_id=self.user_id,
+            domain=challenge.get("domain"),
+            verify_token_expiry=challenge.get("verify_token_expiry"),
+            signature_fingerprint=sign_details.get("fingerprint"),
+            server_key_fingerprint=server_key_fingerprint,
+            final_challenge_size=len(encrypted),
+        )
         status, login_payload, raw, _ = self._request_json("POST", "/auth/jwt/login.json", {"challenge": encrypted, "user_id": self.user_id})
+        self._log("info", "JWT login response received", http_status=status, response_body=raw)
         if status >= 400 or status == 0:
+            self._log("error", "JWT login failed", http_status=status, response_body=raw)
             raise RuntimeError(_extract_message(login_payload, raw or f"JWT login failed HTTP {status}"))
 
         token_payload = self._extract_token_payload(gpg, login_payload)
@@ -741,9 +763,13 @@ class PassboltApiAuthService:
             usable = self._assert_private_key_usable(gpg)
             s.done("success", "Clé privée utilisable", details=usable)
 
-            verify_token = secrets.token_urlsafe(32)
-            challenge_payload = {"version": "1.0.0", "domain": self.base_url, "verify_token": verify_token, "verify_token_expiry": _now_plus(5)}
-            s = steps[11]; s.start(); s.done("success", "Challenge JWT généré", details={"fields": list(challenge_payload.keys())})
+            challenge_payload = self._build_jwt_challenge()
+            verify_token = str(challenge_payload.get("verify_token") or "")
+            s = steps[11]; s.start(); s.done(
+                "success",
+                "Challenge JWT généré",
+                details={"fields": list(challenge_payload.keys()), "verify_token_format": "uuid", "verify_token_expiry_format": "unix_epoch_seconds"},
+            )
 
             s = steps[12]; s.start()
             sign_details: dict[str, Any] = {}
@@ -759,15 +785,41 @@ class PassboltApiAuthService:
             s.done("success", "Challenge JWT signé", details=sign_details)
 
             s = steps[13]; s.start()
-            encrypted = self._encrypt_for_server(gpg, json.dumps({"user_id": self.user_id, "challenge": challenge_payload, "challenge_signature": signature}), server_key)
-            s.done("success", "Challenge JWT chiffré", details={"size": len(encrypted)})
+            encrypted, server_key_fingerprint = self._encrypt_for_server(
+                gpg,
+                json.dumps({"user_id": self.user_id, "challenge": challenge_payload, "challenge_signature": signature}),
+                server_key,
+            )
+            s.done("success", "Challenge JWT chiffré", details={"size": len(encrypted), "server_key_fingerprint": server_key_fingerprint})
 
             s = steps[14]; s.start()
             status, login_payload, raw, _ = self._request_json("POST", "/auth/jwt/login.json", {"challenge": encrypted, "user_id": self.user_id})
+            jwt_login_details = {
+                "user_id_sent": self.user_id,
+                "domain_sent": challenge_payload.get("domain"),
+                "verify_token_expiry_sent": challenge_payload.get("verify_token_expiry"),
+                "signature_fingerprint": sign_details.get("fingerprint"),
+                "server_key_fingerprint": server_key_fingerprint,
+                "challenge_size_sent": len(encrypted),
+                "http_status": status,
+                "response_body": raw,
+                "pipeline_order": [
+                    "1) génération JSON",
+                    "2) signature clé privée client",
+                    "3) chiffrement clé publique serveur",
+                    "4) POST /auth/jwt/login.json",
+                ],
+            }
             if status >= 400 or status == 0:
-                s.done("error", "JWT login échoué", http_status=status or None, endpoint="/auth/jwt/login.json", details={"error": _extract_message(login_payload, raw)})
+                s.done(
+                    "error",
+                    "JWT login échoué",
+                    http_status=status or None,
+                    endpoint="/auth/jwt/login.json",
+                    details={**jwt_login_details, "error": _extract_message(login_payload, raw)},
+                )
                 return finalize()
-            s.done("success", "JWT login réussi", http_status=status, endpoint="/auth/jwt/login.json")
+            s.done("success", "JWT login réussi", http_status=status, endpoint="/auth/jwt/login.json", details=jwt_login_details)
 
             token_payload = self._extract_token_payload(gpg, login_payload)
 

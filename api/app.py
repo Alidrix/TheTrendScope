@@ -1369,7 +1369,7 @@ def delete_config_status() -> Any:
     if sign_step.get("status") == "error":
         message = sign_step.get("message") or "Déverrouillage de la clé privée échoué lors de la signature applicative"
     elif jwt_step.get("status") == "error":
-        message = jwt_step.get("message") or "Login JWT échoué"
+        message = jwt_step.get("message") or "Crypto locale OK / Login JWT KO"
 
     payload = {
         "configured": overall_status == "ok" and groups_step.get("status") == "success",
