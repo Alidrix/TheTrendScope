@@ -1340,12 +1340,23 @@ def delete_config_status() -> Any:
     auth = PassboltApiAuthServiceV2()
     report = auth.run_diagnostic()
     groups_step = next((step for step in report.get("steps", []) if step.get("id") == "groups"), {})
+    sign_step = next((step for step in report.get("steps", []) if step.get("id") == "sign"), {})
+    jwt_step = next((step for step in report.get("steps", []) if step.get("id") == "jwt_login"), {})
     overall_status = report.get("overall_status")
+
+    message = groups_step.get("message") or "Diagnostic API Passbolt exécuté"
+    if sign_step.get("status") == "error":
+        message = sign_step.get("message") or "Déverrouillage de la clé privée échoué lors de la signature applicative"
+    elif jwt_step.get("status") == "error":
+        message = jwt_step.get("message") or "Login JWT échoué"
+
     payload = {
         "configured": overall_status == "ok" and groups_step.get("status") == "success",
-        "message": groups_step.get("message") or "Diagnostic API Passbolt exécuté",
+        "message": message,
         "overall_status": overall_status,
         "groups_status": groups_step.get("status", "skipped"),
+        "sign_status": sign_step.get("status", "skipped"),
+        "jwt_login_status": jwt_step.get("status", "skipped"),
     }
     _save_live_log(
         "delete",
