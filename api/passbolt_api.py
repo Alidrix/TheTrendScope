@@ -174,6 +174,7 @@ class PassboltApiAuthService:
         self.totp_secret = (os.getenv("PASSBOLT_API_TOTP_SECRET", "") or "").strip()
         self.timeout = int(os.getenv("PASSBOLT_API_TIMEOUT", "30"))
         self._session = requests.Session()
+        self._session_id = id(self._session)
         self._tokens: dict[str, Any] = {}
         self._logger = logger
         self._last_verify_token: str | None = None
@@ -463,8 +464,19 @@ class PassboltApiAuthService:
         message = "Configuration minimale détectée" if configured else "Configuration API Passbolt incomplète"
         return {"configured": configured, "checks": checks, "message": message}
 
-    def _request_json(self, method: str, path: str, payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any], str, requests.Response | None]:
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, Any], str, requests.Response | None]:
         url = f"{self.base_url}{path}"
+        headers = {"Accept": "application/json", **dict(self._session.headers)}
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        if extra_headers:
+            headers.update(extra_headers)
         try:
             response = self._session.request(
                 method,
@@ -472,7 +484,7 @@ class PassboltApiAuthService:
                 json=payload,
                 timeout=self.timeout,
                 verify=self.verify_setting,
-                headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self._session.headers)},
+                headers=headers,
             )
             data: dict[str, Any] = {}
             if response.text:
@@ -483,6 +495,28 @@ class PassboltApiAuthService:
             return response.status_code, data, response.text[:2000], response
         except requests.RequestException as error:
             return 0, {}, str(error), None
+
+    def _cookie_names(self) -> list[str]:
+        return sorted({cookie.name for cookie in self._session.cookies})
+
+    def _cookie_state(self) -> dict[str, Any]:
+        names = self._cookie_names()
+        csrf = self._session.cookies.get("csrfToken")
+        passbolt_mfa = self._session.cookies.get("passbolt_mfa")
+        return {
+            "names": names,
+            "csrfToken_present": bool(csrf),
+            "passbolt_mfa_present": bool(passbolt_mfa),
+        }
+
+    def _ensure_csrf_cookie(self) -> dict[str, Any]:
+        status, payload, raw, _ = self._request_json("GET", "/auth/verify.json")
+        return {
+            "status": status,
+            "ok": 0 < status < 400,
+            "message": _extract_message(payload, raw),
+            "cookie_state": self._cookie_state(),
+        }
 
     def _ensure_gpg_home(self) -> dict[str, Any]:
         if not self.gnupg_home:
@@ -780,8 +814,42 @@ class PassboltApiAuthService:
 
         self._log("info", "TOTP generated")
         code = pyotp.TOTP(self.totp_secret.replace(" ", "")).now()
-        self._log("info", "Calling /mfa/verify/totp.json")
-        status, payload, raw, _ = self._request_json("POST", "/mfa/verify/totp.json", {"totp": code})
+        before_cookies = self._cookie_state()
+        csrf_token = self._session.cookies.get("csrfToken")
+        csrf_bootstrap: dict[str, Any] | None = None
+        if not csrf_token:
+            csrf_bootstrap = self._ensure_csrf_cookie()
+            csrf_token = self._session.cookies.get("csrfToken")
+
+        session_reused = id(self._session) == self._session_id
+        headers: dict[str, str] = {}
+        if csrf_token:
+            headers["X-CSRF-Token"] = csrf_token
+
+        self._log(
+            "info",
+            "Calling /mfa/verify/totp.json",
+            session_object_reused=session_reused,
+            cookies_before_mfa=before_cookies["names"],
+            csrfToken_present_before_mfa=before_cookies["csrfToken_present"],
+            passbolt_mfa_present_before_mfa=before_cookies["passbolt_mfa_present"],
+            csrf_bootstrap=csrf_bootstrap,
+            csrfToken_present=bool(csrf_token),
+            x_csrf_token_header_sent=bool(headers.get("X-CSRF-Token")),
+        )
+
+        status, payload, raw, _ = self._request_json("POST", "/mfa/verify/totp.json", {"totp": code}, extra_headers=headers)
+        after_cookies = self._cookie_state()
+        self._log(
+            "info",
+            "MFA verify response",
+            session_object_reused=session_reused,
+            mfa_http_status=status,
+            mfa_raw_response=raw,
+            cookies_after_mfa=after_cookies["names"],
+            csrfToken_present_after_mfa=after_cookies["csrfToken_present"],
+            passbolt_mfa_present_after_mfa=after_cookies["passbolt_mfa_present"],
+        )
         if status >= 400:
             self._last_mfa_status = "failed"
             self._log("error", "MFA verification failed: invalid TOTP", status=status)

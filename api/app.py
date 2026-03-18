@@ -672,6 +672,14 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             "results": [],
         }
     results: list[dict[str, Any]] = []
+    auth_service._logger = lambda level, message, **details: _save_live_log(  # noqa: SLF001
+        "delete",
+        "audit" if level == "info" else level,
+        message,
+        batch_uuid=batch_uuid,
+        event_code="delete.auth.trace",
+        payload=details or None,
+    )
 
     tls = get_tls_diagnostics()
     _save_live_log(
