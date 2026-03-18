@@ -1532,6 +1532,29 @@ class PassboltDeleteService:
         status, payload, raw, _ = self.auth._request_json(method, path)
         return status, payload, _extract_message(payload, raw)
 
+    def _delete_request(self, path: str) -> tuple[int, dict[str, Any], str, dict[str, Any]]:
+        before = self.auth._cookie_state()  # noqa: SLF001
+        csrf_token = self.auth._session.cookies.get("csrfToken")  # noqa: SLF001
+        headers: dict[str, str] = {}
+        if csrf_token:
+            headers["X-CSRF-Token"] = csrf_token
+        status, payload, raw, _ = self.auth._request_json("DELETE", path, extra_headers=headers)  # noqa: SLF001
+        after = self.auth._cookie_state()  # noqa: SLF001
+        debug = {
+            "http_method": "DELETE",
+            "endpoint_called": path,
+            "csrf_cookie_present": before.get("csrfToken_present", False),
+            "x_csrf_header_sent": bool(headers.get("X-CSRF-Token")),
+            "passbolt_session_present": bool(before.get("values", {}).get("passbolt_session")),
+            "passbolt_mfa_present": bool(before.get("passbolt_mfa_present")),
+            "cookies_before_delete": before.get("values", {}),
+            "cookies_after_delete": after.get("values", {}),
+            "http_status": status,
+            "response_summary": _extract_message(payload, raw),
+        }
+        self.auth._log("info", "Delete request executed", **debug)  # noqa: SLF001
+        return status, payload, _extract_message(payload, raw), debug
+
     @staticmethod
     def _extract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
         body = payload.get("body") if isinstance(payload, dict) else None
@@ -1562,6 +1585,10 @@ class PassboltDeleteService:
             raise RuntimeError(message or f"get user failed HTTP {status}")
         return payload.get("body") if isinstance(payload, dict) and isinstance(payload.get("body"), dict) else payload
 
+    def get_user_with_status(self, user_id: str) -> tuple[int, dict[str, Any], str]:
+        status, payload, message = self._request("GET", f"/users/{user_id}.json")
+        return status, payload, message
+
     def _resolve_role(self, user_payload: dict[str, Any]) -> str:
         role = user_payload.get("role")
         if isinstance(role, dict):
@@ -1582,12 +1609,16 @@ class PassboltDeleteService:
         return (fallback or "unknown").lower()
 
     def delete_user_dry_run(self, user_id: str) -> tuple[bool, str, dict[str, Any]]:
-        status, payload, message = self._request("DELETE", f"/users/{user_id}/dry-run.json")
-        return status < 300, parse_dry_run_message(payload, message), payload
+        status, payload, message, debug = self._delete_request(f"/users/{user_id}/dry-run.json")
+        payload_with_debug = dict(payload) if isinstance(payload, dict) else {}
+        payload_with_debug["debug_delete"] = debug
+        return status < 300, parse_dry_run_message(payload, message), payload_with_debug
 
     def delete_user(self, user_id: str) -> tuple[bool, str, dict[str, Any]]:
-        status, payload, message = self._request("DELETE", f"/users/{user_id}.json")
-        return status < 300, message, payload
+        status, payload, message, debug = self._delete_request(f"/users/{user_id}.json")
+        payload_with_debug = dict(payload) if isinstance(payload, dict) else {}
+        payload_with_debug["debug_delete"] = debug
+        return status < 300, message, payload_with_debug
 
     def delete_group_dry_run(self, group_id: str) -> tuple[bool, str, dict[str, Any]]:
         status, payload, message = self._request("DELETE", f"/groups/{group_id}/dry-run.json")
