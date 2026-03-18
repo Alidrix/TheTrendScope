@@ -2,26 +2,21 @@ import { state } from '../state.js';
 import { $, escapeHtml, setToast, textCell } from '../utils.js';
 import { kpiCard } from '../components/kpi-card.js';
 import { appendConsoleLine } from '../components/console-panel.js';
-import { statusBadge, statusChip } from '../components/status-chip.js';
+import { statusBadge } from '../components/status-chip.js';
 
 export function renderImporterView() {
   $('importerView').innerHTML = `
     <div class="import-shell-grid">
       <section class="card">
-        <div class="section-header"><h3>Dépôt CSV</h3><span id="importModeChip">${statusChip('warning', 'Dry-run actif')}</span></div>
         <div class="drop-zone">
           <label for="importFile" class="muted">Déposez ou sélectionnez un fichier CSV</label>
           <input id="importFile" type="file" accept=".csv"/>
-        </div>
-        <div class="import-inline-options mt-3">
-          <input id="importBatchLabel" class="input-compact" placeholder="Nom de lot (optionnel)" aria-label="Nom de lot optionnel"/>
-          <label id="importDryRunToggle" class="toggle-control compact"><input id="importDryRun" type="checkbox" checked/><span class="toggle-slider"></span><span class="toggle-text">Prévalidation activée</span></label>
         </div>
         <div class="action-bar mt-3"><button class="btn btn-primary" id="importStartBtn">Démarrer l'import</button></div>
       </section>
 
       <section class="card">
-        <div class="section-header"><h3>Progression live</h3><span class="muted" id="importProgressLabel">Prêt</span></div>
+        <div class="section-header"><span class="muted" id="importProgressLabel">Prêt</span></div>
         <div id="importProgressWrap" class="progress-track"><div class="progress-bar" id="importProgressBar"></div></div>
         <p class="muted mt-3">Console technique</p>
         <pre class="console" id="importConsole"></pre>
@@ -29,13 +24,10 @@ export function renderImporterView() {
     </div>
 
     <section class="card">
-      <div class="section-header"><h3>Résultats finaux</h3></div>
       <div id="importSummaryCards" class="grid-kpi"></div>
       <div class="table-wrap mt-3"><table><thead><tr><th>Email</th><th>Statut</th><th>Groupes demandés</th><th>Détails</th></tr></thead><tbody id="importResultsRows"></tbody></table></div>
     </section>
   `;
-  updateDryRunToggle();
-  $('importDryRun').addEventListener('change', updateDryRunToggle);
   $('importStartBtn').addEventListener('click', runImportFlow);
 }
 
@@ -44,14 +36,6 @@ function setImportProgress(percent, stage) {
   $('importProgressBar').style.width = `${safePercent}%`;
   $('importProgressWrap').style.display = safePercent >= 100 ? 'none' : 'block';
   $('importProgressLabel').textContent = `${safePercent}% · ${stage || 'running'}`;
-}
-
-function updateDryRunToggle() {
-  const checked = $('importDryRun')?.checked;
-  $('importDryRunToggle')?.classList.toggle('off', !checked);
-  const text = $('importDryRunToggle')?.querySelector('.toggle-text');
-  if (text) text.textContent = checked ? 'Prévalidation activée' : 'Prévalidation désactivée';
-  $('importModeChip').innerHTML = checked ? statusChip('warning', 'Dry-run actif') : statusChip('danger', 'Suppression réelle autorisée');
 }
 
 async function readResponsePayload(res) {
@@ -82,9 +66,7 @@ async function runImportFlow() {
   try {
     const form = new FormData();
     form.append('file', f);
-    const label = $('importBatchLabel')?.value?.trim();
-    if (label) form.append('batch_label', label);
-    form.append('dry_run_only', $('importDryRun').checked ? 'true' : 'false');
+    form.append('dry_run_only', 'true');
 
     const res = await fetch('/api/import-stream', { method: 'POST', body: form });
     if (!res.ok) {
