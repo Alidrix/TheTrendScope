@@ -186,6 +186,9 @@ export function renderPassboltHealthView() {
 }
 
 export async function refreshPassboltHealth() {
+  const previousGlobal = $('passboltHealthGlobal')?.innerHTML || '';
+  const previousSummary = $('passboltHealthSummary')?.innerHTML || '';
+  const previousSteps = $('passboltHealthSteps')?.innerHTML || '';
   try {
     const report = await apiGet('/api/passbolt/health');
     const global = GLOBAL_COLORS[report.overall_status] || { chip: 'unknown', label: 'Non détecté' };
@@ -195,6 +198,22 @@ export async function refreshPassboltHealth() {
     $('passboltHealthSteps').innerHTML = steps.length ? steps.map(renderStep).join('') : '<div class="soft-empty">Aucune étape retournée par le backend.</div>';
 
   } catch (error) {
+    if (!$('passboltHealthGlobal')?.innerHTML && previousGlobal) $('passboltHealthGlobal').innerHTML = previousGlobal;
+    if (!$('passboltHealthSummary')?.innerHTML && previousSummary) $('passboltHealthSummary').innerHTML = previousSummary;
+    if (!$('passboltHealthSteps')?.innerHTML && previousSteps) $('passboltHealthSteps').innerHTML = previousSteps;
+    const errorMessage = error?.message || String(error);
+    const safeMessage = escapeHtml(errorMessage);
+    const errorBlock = `
+      <div class="health-step health-step-error">
+        <div class="health-step-head">
+          <strong>Erreur Python / backend</strong>
+          ${statusChip('error', 'error')}
+        </div>
+        <p>Le diagnostic a rencontré une exception, mais les données déjà calculées sont conservées ci-dessous.</p>
+        <pre class="json-block">${safeMessage}</pre>
+      </div>
+    `;
+    $('passboltHealthSteps').innerHTML = `${errorBlock}${$('passboltHealthSteps')?.innerHTML || ''}`;
     setToast(`Diagnostic Passbolt indisponible: ${error.message}`);
   }
 }

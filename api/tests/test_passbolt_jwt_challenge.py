@@ -99,6 +99,23 @@ class PassboltJwtChallengeRegressionTests(unittest.TestCase):
         self.assertEqual(args[trust_index + 1], 'always')
         self.assertEqual(details['trust_model_used'], 'always')
 
+    def test_gpg_path_is_always_defined(self) -> None:
+        with patch.dict(os.environ, {"PASSBOLT_GPG_PATH": "/custom/gpg"}, clear=False):
+            service = self._service()
+        self.assertEqual(service.gpg_path, "/custom/gpg")
+
+    def test_decrypt_login_response_uses_configured_gpg_path(self) -> None:
+        service = self._service()
+        service.gpg_path = "/custom/gpg"
+
+        with patch("passbolt_api.subprocess.run") as run_mock:
+            run_mock.return_value = SimpleNamespace(returncode=0, stdout=b"{}", stderr=b"")
+            service._decrypt_login_response_challenge("/tmp/gnupg", "-----BEGIN PGP MESSAGE-----")
+
+        args = run_mock.call_args.kwargs['args'] if 'args' in run_mock.call_args.kwargs else run_mock.call_args.args[0]
+        self.assertEqual(args[0], "/custom/gpg")
+        self.assertIn("--homedir", args)
+
 
 if __name__ == "__main__":
     unittest.main()
