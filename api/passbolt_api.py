@@ -7,6 +7,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 import traceback
 import uuid
 from dataclasses import dataclass, field
@@ -179,6 +180,8 @@ class PassboltApiAuthService:
         self._logger = logger
         self._last_verify_token: str | None = None
         self._last_mfa_status = "not_required"
+        self._last_mfa_details: dict[str, Any] = {"session_reused": False}
+        self._totp_last_consumed_window: int | None = None
 
     def _get_gpg_path(self) -> str:
         path = (getattr(self, "gpg_path", "") or "").strip()
@@ -503,8 +506,10 @@ class PassboltApiAuthService:
         names = self._cookie_names()
         csrf = self._session.cookies.get("csrfToken")
         passbolt_mfa = self._session.cookies.get("passbolt_mfa")
+        cookie_values = {cookie.name: cookie.value for cookie in self._session.cookies}
         return {
             "names": names,
+            "values": cookie_values,
             "csrfToken_present": bool(csrf),
             "passbolt_mfa_present": bool(passbolt_mfa),
         }
@@ -802,6 +807,17 @@ class PassboltApiAuthService:
         providers = token_payload.get("providers")
         if not providers:
             self._last_mfa_status = "not_required"
+            self._last_mfa_details = {
+                "session_reused": id(self._session) == self._session_id,
+                "cookies_before_mfa": self._cookie_state().get("values", {}),
+                "cookies_after_mfa": self._cookie_state().get("values", {}),
+                "passbolt_mfa_present": bool(self._session.cookies.get("passbolt_mfa")),
+                "access_token_present": bool(self._session.headers.get("Authorization")),
+                "generated_totp": "",
+                "seconds_remaining_at_post": None,
+                "mfa_http_status": None,
+                "mfa_raw_response": "MFA not required",
+            }
             return "not_required"
 
         self._log("info", "MFA required", providers=providers)
@@ -812,8 +828,40 @@ class PassboltApiAuthService:
             self._last_mfa_status = "failed"
             raise RuntimeError("MFA required but PASSBOLT_API_TOTP_SECRET is missing")
 
-        self._log("info", "TOTP generated")
-        code = pyotp.TOTP(self.totp_secret.replace(" ", "")).now()
+        totp = pyotp.TOTP(self.totp_secret.replace(" ", ""))
+        interval = int(getattr(totp, "interval", 30) or 30)
+
+        def _seconds_remaining(now_ts: int) -> int:
+            return interval - (now_ts % interval)
+
+        now_ts = int(time.time())
+        remaining = _seconds_remaining(now_ts)
+        if remaining <= 5:
+            wait_seconds = remaining + 1
+            self._log("info", "TOTP near rollover, waiting next window", seconds_remaining=remaining, sleep_seconds=wait_seconds)
+            time.sleep(wait_seconds)
+
+        generation_ts = int(time.time())
+        seconds_remaining_at_generation = _seconds_remaining(generation_ts)
+        code = totp.at(generation_ts)
+        totp_window = generation_ts // interval
+
+        replay_guard_triggered = False
+        if self._totp_last_consumed_window is not None and totp_window == self._totp_last_consumed_window:
+            replay_guard_triggered = True
+            self._log(
+                "warning",
+                "Current TOTP window may already be consumed by another flow; regenerating in next window",
+                generated_totp=code,
+                totp_window=totp_window,
+            )
+            wait_seconds = _seconds_remaining(generation_ts) + 1
+            time.sleep(wait_seconds)
+            generation_ts = int(time.time())
+            seconds_remaining_at_generation = _seconds_remaining(generation_ts)
+            code = totp.at(generation_ts)
+            totp_window = generation_ts // interval
+
         before_cookies = self._cookie_state()
         csrf_token = self._session.cookies.get("csrfToken")
         csrf_bootstrap: dict[str, Any] | None = None
@@ -826,6 +874,7 @@ class PassboltApiAuthService:
         if csrf_token:
             headers["X-CSRF-Token"] = csrf_token
 
+        seconds_remaining_at_post = _seconds_remaining(int(time.time()))
         self._log(
             "info",
             "Calling /mfa/verify/totp.json",
@@ -833,13 +882,32 @@ class PassboltApiAuthService:
             csrf_cookie_present=before_cookies["csrfToken_present"],
             passbolt_mfa_cookie_present=before_cookies["passbolt_mfa_present"],
             x_csrf_header_sent=bool(headers.get("X-CSRF-Token")),
-            cookies_before_mfa=before_cookies["names"],
+            cookies_before_mfa=before_cookies["values"],
             csrf_bootstrap=csrf_bootstrap,
             csrf_token_available_after_bootstrap=bool(csrf_token),
+            generated_totp=code,
+            seconds_remaining_at_generation=seconds_remaining_at_generation,
+            seconds_remaining_at_post=seconds_remaining_at_post,
+            replay_guard_triggered=replay_guard_triggered,
         )
 
         status, payload, raw, _ = self._request_json("POST", "/mfa/verify/totp.json", {"totp": code}, extra_headers=headers)
         after_cookies = self._cookie_state()
+
+        self._last_mfa_details = {
+            "session_reused": session_reused,
+            "cookies_before_mfa": before_cookies.get("values", {}),
+            "cookies_after_mfa": after_cookies.get("values", {}),
+            "passbolt_mfa_present": after_cookies.get("passbolt_mfa_present", False),
+            "access_token_present": bool(self._session.headers.get("Authorization")),
+            "generated_totp": code,
+            "seconds_remaining_at_generation": seconds_remaining_at_generation,
+            "seconds_remaining_at_post": seconds_remaining_at_post,
+            "mfa_http_status": status,
+            "mfa_raw_response": raw,
+            "replay_guard_triggered": replay_guard_triggered,
+        }
+
         self._log(
             "info",
             "MFA verify response",
@@ -849,12 +917,16 @@ class PassboltApiAuthService:
             x_csrf_header_sent=bool(headers.get("X-CSRF-Token")),
             mfa_http_status=status,
             mfa_raw_response=raw,
-            cookies_after_mfa=after_cookies["names"],
+            cookies_after_mfa=after_cookies["values"],
+            generated_totp=code,
+            seconds_remaining_at_post=seconds_remaining_at_post,
         )
         if status >= 400:
             self._last_mfa_status = "failed"
             self._log("error", "MFA verification failed: invalid TOTP", status=status)
             raise RuntimeError(_extract_message(payload, raw or "MFA verification failed: invalid TOTP"))
+
+        self._totp_last_consumed_window = totp_window
         self._last_mfa_status = "verified"
         self._log("info", "MFA verification succeeded")
         return "verified"
@@ -1323,12 +1395,13 @@ class PassboltApiAuthService:
             s = steps[18]; s.start()
             try:
                 mfa_result = self._verify_mfa_if_required(token_payload)
+                mfa_details = dict(self._last_mfa_details or {})
                 if mfa_result == "not_required":
-                    s.done("success", "MFA TOTP non exécutée (non requise)")
+                    s.done("success", "MFA TOTP non exécutée (non requise)", details=mfa_details)
                 else:
-                    s.done("success", "MFA TOTP validée")
+                    s.done("success", "MFA TOTP validée", details=mfa_details)
             except Exception as error:
-                s.done("error", str(error), remediation="Configurer PASSBOLT_API_TOTP_SECRET et vérifier /mfa/verify/totp.json")
+                s.done("error", str(error), details=dict(self._last_mfa_details or {}), remediation="Configurer PASSBOLT_API_TOTP_SECRET et vérifier /mfa/verify/totp.json")
                 return finalize()
 
             s = steps[19]; s.start()
