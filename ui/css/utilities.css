@@ -7,7 +7,7 @@
 .w-100 { width: 100%; }
 .overflow-hidden { overflow: hidden; }
 .align-end { align-items: flex-end; }
-.sticky-filters { position: sticky; top: calc(var(--space-3) + var(--topbar-height)); z-index: 5; }
+.sticky-filters { position: sticky; top: calc(var(--space-2) + var(--topbar-height)); z-index: 5; }
 .text-wrap { white-space: normal; }
 .nowrap { white-space: nowrap; }
 .hidden { display: none !important; }

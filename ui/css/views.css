@@ -1,10 +1,21 @@
 .grid-health { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--space-3); }
-.health-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); background: color-mix(in oklab, var(--surface-2), transparent 10%); display: grid; gap: var(--space-2); min-height: 148px; }
+.health-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: color-mix(in oklab, var(--surface-2), transparent 10%);
+  display: grid;
+  gap: var(--space-2);
+  min-height: 112px;
+}
 
 .dashboard-inline-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--space-2); margin-top: var(--space-3); }
 .dashboard-inline-kpis div { border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in oklab, var(--surface-2), transparent 8%); padding: var(--space-2); display: grid; gap: 2px; }
 .dashboard-activity-item { padding: var(--space-2) 0; border-bottom: 1px dashed color-mix(in oklab, var(--border), transparent 20%); }
 .dashboard-alert-line { border-radius: var(--radius-sm); padding: .55rem .65rem; border: 1px solid color-mix(in oklab, var(--warning), transparent 58%); background: color-mix(in oklab, var(--warning), transparent 92%); }
+
+.import-shell-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: var(--space-4); }
+.import-advanced { border: 1px dashed var(--border); border-radius: var(--radius-md); padding: var(--space-3); background: color-mix(in oklab, var(--surface-2), transparent 12%); }
 
 .deletion-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); }
 .status-mini-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); background: color-mix(in oklab, var(--surface-2), transparent 10%); display: grid; gap: .3rem; }
@@ -41,15 +52,22 @@
 .logs-stream-box.is-error { border-color: color-mix(in oklab, var(--danger), transparent 50%); }
 .audit-line { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: var(--space-3); border-bottom: 1px dashed var(--border); padding: var(--space-2) 0; }
 
-.health-pillars { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--space-2); }
-.health-pillar { border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in oklab, var(--surface-2), transparent 10%); padding: var(--space-2); display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+.health-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-2); }
+.health-summary-cell {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--surface-2), transparent 10%);
+  padding: var(--space-2);
+  display: grid;
+  gap: var(--space-1);
+}
 .health-step { border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: var(--radius-sm); padding: var(--space-3); margin-bottom: var(--space-2); background: color-mix(in oklab, var(--surface-2), transparent 10%); }
 .health-step-success { border-left-color: var(--success); }
 .health-step-warning { border-left-color: var(--warning); }
 .health-step-error { border-left-color: var(--danger); }
 .health-step-skipped { border-left-color: var(--neutral); }
 .health-step-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
-.health-deep-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--space-2); }
+.health-deep-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-2); }
 .health-subsection { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2); background: var(--surface-1); }
 .health-kv { display: grid; grid-template-columns: 1fr 1.1fr; gap: .45rem; padding: .2rem 0; border-bottom: 1px dashed color-mix(in oklab, var(--border), transparent 36%); }
 .health-kv:last-child { border-bottom: 0; }
@@ -58,5 +76,8 @@
 .json-block { white-space: pre-wrap; word-break: break-word; background: color-mix(in oklab, var(--surface-2), transparent 8%); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: var(--space-2); }
 
 @media (max-width: 1100px) {
-  .deletion-target-grid, .master-detail, .audit-line { grid-template-columns: 1fr; }
+  .deletion-target-grid,
+  .master-detail,
+  .audit-line,
+  .import-shell-grid { grid-template-columns: 1fr; }
 }

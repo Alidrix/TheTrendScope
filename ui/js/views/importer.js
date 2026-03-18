@@ -7,15 +7,21 @@ import { pageHeader } from '../components/page-header.js';
 
 export function renderImporterView() {
   $('importerView').innerHTML = `
-    ${pageHeader('Import studio', 'Déposez un CSV, pilotez le mode dry-run et suivez la progression technique en temps réel.')}
-    <div class="grid-two">
+    ${pageHeader('Importer')}
+    <div class="import-shell-grid">
       <section class="card">
         <div class="section-header"><h3>Dépôt CSV</h3><span id="importModeChip">${statusChip('warning', 'Dry-run actif')}</span></div>
-        <div class="drop-zone"><input id="importFile" type="file" accept=".csv"/></div>
-        <div class="form-grid mt-3">
-          <div><label>Nom de lot (optionnel)</label><input id="importBatchLabel" placeholder="Ex: RH-Mars"/></div>
-          <div><label>Prévalidation uniquement</label><label id="importDryRunToggle" class="toggle-control"><input id="importDryRun" type="checkbox" checked/><span class="toggle-slider"></span><span class="toggle-text">Activée</span></label></div>
+        <div class="drop-zone">
+          <label for="importFile" class="muted">Déposez ou sélectionnez un fichier CSV</label>
+          <input id="importFile" type="file" accept=".csv"/>
         </div>
+        <details class="import-advanced mt-3">
+          <summary>Paramètres avancés</summary>
+          <div class="form-grid mt-3">
+            <div><label>Nom de lot (optionnel)</label><input id="importBatchLabel" placeholder="Ex: RH-Mars"/></div>
+            <div><label>Prévalidation uniquement</label><label id="importDryRunToggle" class="toggle-control"><input id="importDryRun" type="checkbox" checked/><span class="toggle-slider"></span><span class="toggle-text">Activée</span></label></div>
+          </div>
+        </details>
         <div class="action-bar mt-3"><button class="btn btn-primary" id="importStartBtn">Démarrer l'import</button></div>
       </section>
 

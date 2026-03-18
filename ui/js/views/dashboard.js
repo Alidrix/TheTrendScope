@@ -7,20 +7,20 @@ import { pageHeader } from '../components/page-header.js';
 
 function normalizeStatus(kind) {
   const map = {
-    ok: { chip: 'operational', label: 'Opérationnel de bout en bout' },
-    warning: { chip: 'degraded', label: 'Testé partiellement' },
-    error: { chip: 'error', label: 'Validation échouée' },
-    missing: { chip: 'error', label: 'Dépendance manquante' },
-    partial: { chip: 'check', label: 'Configuré partiellement' },
+    ok: { chip: 'operational', label: 'Opérationnel' },
+    warning: { chip: 'degraded', label: 'Attention' },
+    error: { chip: 'error', label: 'Erreur' },
+    missing: { chip: 'error', label: 'Manquant' },
+    partial: { chip: 'check', label: 'Partiel' },
     configured: { chip: 'check', label: 'Configuré' },
-    unknown: { chip: 'unknown', label: 'Non détecté' }
+    unknown: { chip: 'unknown', label: 'Inconnu' }
   };
   return map[kind] || map.unknown;
 }
 
 function renderHealthCard(item) {
   const status = normalizeStatus(item?.status || 'unknown');
-  return `<article class="health-card"><h3 class="text-ellipsis">${escapeHtml(item?.label || '-')}</h3><div>${statusChip(status.chip, status.label)}</div><p class="muted text-break">${escapeHtml(item?.detail || '-')}</p></article>`;
+  return `<article class="health-card"><h3 class="text-ellipsis">${escapeHtml(item?.label || '-')}</h3><div>${statusChip(status.chip, status.label)}</div></article>`;
 }
 
 function shortRawMessage(raw) {
@@ -80,11 +80,11 @@ function deriveApiHealthStatus(deleteCfg) {
 
 export function renderDashboardView() {
   $('dashboardView').innerHTML = `
-    ${pageHeader('Cockpit supervision', 'Vue opérationnelle instantanée de l’import, des suppressions et de la santé plateforme.')}
+    ${pageHeader('Dashboard')}
     <div class="grid-health" id="healthGrid"></div>
     <div class="grid-main">
       <div class="card"><div class="section-header"><h3>Dernier import</h3></div><div id="lastImportBlock"></div></div>
-      <div class="card"><div class="section-header"><h3>Alertes prioritaires</h3></div><div id="alertsBlock"></div></div>
+      <div class="card"><div class="section-header"><h3>Alertes</h3></div><div id="alertsBlock"></div></div>
     </div>
     <div class="card"><div class="section-header"><h3>Activité récente</h3></div><div id="activityBlock"></div></div>
   `;
@@ -107,15 +107,11 @@ export async function refreshDashboard() {
     const cliStatus = deriveCliStatus(health);
     const apiHealth = deriveApiHealthStatus(deleteCfg);
 
-    const deleteApiDetail = deleteCfg?.jwt_login_status === 'error'
-      ? (deleteCfg?.message || 'Crypto locale OK / Login JWT rejeté par Passbolt')
-      : (deleteCfg?.groups_status ? `Groupes: ${deleteCfg.groups_status}` : (deleteCfg?.message || 'Diagnostic requis'));
-
     $('healthGrid').innerHTML = [
       { label: 'API Import', ...apiImport },
       { label: 'Création utilisateur via CLI', ...cliStatus },
-      { label: 'Groupes / Suppression API', status: apiHealth.status, detail: deleteApiDetail },
-      { label: 'Base locale', status: 'configured', detail: `${dbSummary?.batches_count || 0} batch` },
+      { label: 'Groupes / Suppression API', status: apiHealth.status },
+      { label: 'Base locale', status: 'configured' },
       { label: 'Santé API globale', ...apiHealth }
     ].map(renderHealthCard).join('');
 
@@ -123,7 +119,6 @@ export async function refreshDashboard() {
       <p class="text-ellipsis"><strong>${escapeHtml(latest.filename || '-')}</strong></p>
       <p class="muted text-ellipsis">${formatDate(latest.created_at)}</p>
       <p class="mt-2">${statusBadge(latest.status)}</p>
-      <p class="muted text-ellipsis mt-2">${escapeHtml(latest.batch_uuid || '-')}</p>
       <div class="dashboard-inline-kpis">
         <div><span class="muted">Créés</span><strong>${escapeHtml(latest.success_count || 0)}</strong></div>
         <div><span class="muted">Groupes</span><strong>${escapeHtml(latest.group_assignments || 0)}</strong></div>

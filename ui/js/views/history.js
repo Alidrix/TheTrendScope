@@ -8,7 +8,7 @@ import { pageHeader } from '../components/page-header.js';
 
 export function renderHistoryView() {
   $('historyView').innerHTML = `
-    ${pageHeader('History explorer', 'Parcourez les lots importés avec une navigation master-detail claire et rapide.')}
+    ${pageHeader('Historique')}
     <div class="master-detail">
       <section class="card">
         <div class="form-grid">
@@ -65,7 +65,7 @@ function renderHistoryList() {
   const selected = state.batches.find((b) => b.batch_uuid === state.activeBatch);
   $('historyDetail').innerHTML = selected
     ? `
-      <div class="section-header"><h3>Détails du batch</h3>${statusBadge(selected.status)}</div>
+      <div class="section-header"><h3>Lot actif</h3>${statusBadge(selected.status)}</div>
       <div class="grid-kpi">
         ${kpiCard('Succès', selected.success_count || 0)}
         ${kpiCard('Erreurs', selected.errors_count || 0)}

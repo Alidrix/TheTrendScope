@@ -23,6 +23,7 @@ export function setToast(msg, level) {
   const tone = level || inferLevel(msg);
   const item = document.createElement('article');
   item.className = `system-message ${tone}`;
+  item.setAttribute('role', 'status');
   item.innerHTML = `<strong>${escapeHtml(msg)}</strong><small>${formatDate(new Date().toISOString())}</small>`;
   center.prepend(item);
 
@@ -30,6 +31,6 @@ export function setToast(msg, level) {
 
   setTimeout(() => {
     item.classList.add('fade-out');
-    setTimeout(() => item.remove(), 180);
+    setTimeout(() => item.remove(), 200);
   }, 5200);
 }

@@ -29,7 +29,7 @@ const STATUS_META = {
 
 export function renderDeletionsView() {
   $('deletionsView').innerHTML = `
-    ${pageHeader('Deletion control room', 'Analysez un batch, validez les protections puis exécutez uniquement quand toutes les conditions sont réunies.', '<span id="deleteModeBadge" class="mode-badge">-</span>')}
+    ${pageHeader('Suppressions', '', '<span id="deleteModeBadge" class="mode-badge">-</span>')}
 
     <div class="deletion-status-grid">
       <div class="status-mini-card"><span class="label">API Suppression</span><div id="deleteApiMini">${statusChip('check', 'Vérification...')}</div></div>
@@ -39,7 +39,7 @@ export function renderDeletionsView() {
     </div>
 
     <section class="card">
-      <div class="section-header"><h3>1 · Ciblage</h3><p>La suppression reste limitée au batch choisi, avec protection admin conservée.</p></div>
+      <div class="section-header"><h3>1 · Ciblage</h3></div>
       <div class="deletion-target-grid">
         <div><label>Batch à analyser</label><select id="deleteBatchSelect"></select></div>
         <div><label>Mode dry-run</label><label id="deleteDryRunToggle" class="toggle-control"><input id="deleteDryRunOnly" type="checkbox" checked/><span class="toggle-slider"></span><span class="toggle-text">Activé</span></label></div>
@@ -49,7 +49,7 @@ export function renderDeletionsView() {
     </section>
 
     <section class="card">
-      <div class="section-header"><h3>2 · Analyse / prévisualisation</h3></div>
+      <div class="section-header"><h3>2 · Analyse</h3></div>
       <div id="deleteAnalysisWrap" class="table-wrap"></div>
     </section>
 
@@ -59,10 +59,9 @@ export function renderDeletionsView() {
     </section>
 
     <section class="card controlled-action-card">
-      <div class="section-header"><h3>4 · Exécution contrôlée</h3><p>Suppression réelle uniquement après analyse et confirmation explicite.</p></div>
+      <div class="section-header"><h3>4 · Exécution contrôlée</h3></div>
       <label class="confirm-control"><input id="deleteConfirm" type="checkbox"/> Je confirme vouloir lancer la suppression réelle des comptes éligibles.</label>
       <div class="action-bar mt-3"><button id="deleteExecuteBtn" class="btn btn-danger" disabled>Lancer la suppression réelle</button></div>
-      <p class="muted mt-3">Sécurité backend inchangée : admins et exclusions restent ignorés.</p>
     </section>
 
     <details class="card technical-logs" open>
@@ -85,8 +84,8 @@ function updateDryRunToggle() {
   $('deleteDryRunToggle')?.classList.toggle('off', !checked);
   const text = $('deleteDryRunToggle')?.querySelector('.toggle-text');
   if (text) text.textContent = checked ? 'Activé' : 'Désactivé';
-  $('deleteDryRunMini').textContent = checked ? 'Dry-run' : 'Réel';
-  $('deleteModeBadge').innerHTML = checked ? statusChip('warning', 'Mode simulation') : statusChip('danger', 'Mode suppression réelle');
+  $('deleteDryRunMini').textContent = checked ? 'Simulation' : 'Réel';
+  $('deleteModeBadge').innerHTML = checked ? statusChip('warning', 'Simulation') : statusChip('danger', 'Réel');
   refreshExecuteButtonState();
 }
 

@@ -8,7 +8,7 @@ import { pageHeader } from '../components/page-header.js';
 
 export function renderLogsView() {
   $('logsAuditView').innerHTML = `
-    ${pageHeader('Logs & observability', 'Flux technique, tableau détaillé et audit métier dans une vue unifiée.')}
+    ${pageHeader('Logs & audit')}
     <div class="card sticky-filters logs-filters-card">
       <div class="form-grid">
         <div><label>Batch</label><select id="logsBatchFilter"><option value="">Tous</option></select></div>

@@ -2,17 +2,21 @@
   display: flex;
   align-items: center;
   min-height: 42px;
-  padding: 0.65rem 0.85rem;
+  padding: 0.65rem 0.9rem;
   border-radius: var(--radius-pill);
   border: 1px solid transparent;
   color: var(--text-2);
   font-size: var(--text-sm);
 }
-.menu-item:hover { border-color: var(--border); background: color-mix(in oklab, var(--surface-2), transparent 14%); color: var(--text-1); }
+.menu-item:hover {
+  border-color: var(--border);
+  background: color-mix(in oklab, var(--surface-2), transparent 14%);
+  color: var(--text-1);
+}
 .menu-item.active {
   color: #fff;
   border-color: color-mix(in oklab, var(--info), transparent 40%);
-  background: linear-gradient(130deg, color-mix(in oklab, var(--info), #0b1220 35%), color-mix(in oklab, var(--success), #102035 60%));
+  background: linear-gradient(132deg, color-mix(in oklab, var(--info), #0b1120 34%), color-mix(in oklab, var(--success), #0e2037 58%));
   box-shadow: var(--shadow-soft);
 }
 
@@ -39,10 +43,9 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
 }
-.page-header .subtitle { margin-top: 0.3rem; color: var(--text-3); font-size: var(--text-sm); }
 
 .btn {
   border-radius: var(--radius-pill);
@@ -55,25 +58,25 @@
 .btn:disabled { opacity: 0.46; cursor: not-allowed; transform: none; }
 .btn-primary { color: #fff; background: var(--gradient-brand); border-color: color-mix(in oklab, var(--info), transparent 45%); }
 .btn-secondary { background: var(--surface-2); border-color: var(--border); }
-.btn-danger { color: #fff; background: linear-gradient(130deg, color-mix(in oklab, var(--danger), #180b10 26%), color-mix(in oklab, var(--danger), #a10420 12%)); border-color: color-mix(in oklab, var(--danger), transparent 38%); }
+.btn-danger { color: #fff; background: linear-gradient(132deg, color-mix(in oklab, var(--danger), #140a0f 20%), color-mix(in oklab, var(--danger), #a10523 10%)); border-color: color-mix(in oklab, var(--danger), transparent 40%); }
 .btn-ghost { background: transparent; border-color: var(--border); color: var(--text-2); }
 .action-bar { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 
 .icon-btn {
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--surface-1), transparent 5%);
-  box-shadow: var(--shadow-soft);
+  background: color-mix(in oklab, var(--surface-1), transparent 4%);
+  box-shadow: none;
   cursor: pointer;
 }
 .icon-btn:hover { transform: translateY(-1px); border-color: var(--border-strong); }
 
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--space-3); min-width: 0; }
-.grid-kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-3); }
-.grid-two { display: grid; grid-template-columns: 1.1fr .9fr; gap: var(--space-4); }
-.grid-main { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: var(--space-4); }
+.grid-kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); }
+.grid-two { display: grid; grid-template-columns: 1.05fr .95fr; gap: var(--space-4); }
+.grid-main { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: var(--space-4); }
 
 .kpi-card {
   border: 1px solid var(--border);
@@ -82,7 +85,9 @@
   background: color-mix(in oklab, var(--surface-2), transparent 6%);
   display: grid;
   gap: 0.35rem;
+  transition: transform 180ms ease, border-color 180ms ease;
 }
+.kpi-card:hover { transform: translateY(-2px); border-color: var(--border-strong); }
 .kpi-card .label { font-size: var(--text-xs); color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
 .kpi-card .value { font-size: clamp(1.2rem, 1.1rem + 0.75vw, 1.8rem); font-weight: 700; }
 .kpi-card .trend { font-size: var(--text-xs); color: var(--text-3); }
@@ -93,7 +98,7 @@
   gap: 0.4rem;
   border-radius: var(--radius-pill);
   border: 1px solid;
-  padding: 0.27rem 0.62rem;
+  padding: 0.3rem 0.64rem;
   font-size: var(--text-xs);
   max-width: 100%;
 }
@@ -187,22 +192,22 @@ tr:hover td { background: color-mix(in oklab, var(--surface-2), transparent 8%);
   border: 1px solid var(--border);
   border-left-width: 4px;
   background: color-mix(in oklab, var(--surface-1), #fff 1%);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-strong);
-  padding: 0.75rem 0.85rem;
+  padding: 0.8rem 0.9rem;
   display: grid;
-  gap: 0.18rem;
-  animation: notif-in 220ms ease;
+  gap: 0.2rem;
+  animation: notif-in 260ms ease;
 }
-.system-message.fade-out { animation: notif-out 180ms ease forwards; }
+.system-message.fade-out { animation: notif-out 200ms ease forwards; }
 .system-message strong { font-size: var(--text-sm); }
 .system-message small { color: var(--text-3); font-size: var(--text-xs); }
 .system-message.info { border-left-color: var(--info); }
 .system-message.success { border-left-color: var(--success); }
 .system-message.warning { border-left-color: var(--warning); }
 .system-message.error { border-left-color: var(--danger); }
-@keyframes notif-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes notif-out { to { opacity: 0; transform: translateY(6px); } }
+@keyframes notif-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes notif-out { to { opacity: 0; transform: translateY(8px) scale(.98); } }
 
 .toast { display: none !important; }
 
@@ -217,12 +222,11 @@ tr:hover td { background: color-mix(in oklab, var(--surface-2), transparent 8%);
 
 .danger-zone, .controlled-action-card {
   border-color: color-mix(in oklab, var(--danger), transparent 55%);
-  background: linear-gradient(180deg, color-mix(in oklab, var(--danger), transparent 94%), color-mix(in oklab, var(--surface-1), transparent 1%));
+  background: linear-gradient(180deg, color-mix(in oklab, var(--danger), transparent 94%), color-mix(in oklab, var(--surface-1), transparent 2%));
 }
 
 .confirm-control { display: flex; gap: .6rem; align-items: flex-start; }
 .confirm-control input { width: 18px; margin-top: 2px; }
-
 .technical-logs summary { cursor: pointer; font-weight: 700; }
 
 @media (max-width: 1200px) {

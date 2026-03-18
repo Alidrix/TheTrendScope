@@ -13,7 +13,7 @@
   display: grid;
   align-content: start;
   gap: var(--space-5);
-  background: linear-gradient(170deg, color-mix(in oklab, var(--surface-1), #000 10%), color-mix(in oklab, var(--surface-3), #000 5%));
+  background: linear-gradient(170deg, color-mix(in oklab, var(--surface-1), #000 10%), color-mix(in oklab, var(--surface-3), #000 4%));
   border-right: 1px solid var(--border);
 }
 
@@ -45,20 +45,30 @@
 }
 
 .topbar {
-  height: var(--topbar-height);
+  min-height: var(--topbar-height);
   display: flex;
   justify-content: flex-end;
   align-items: center;
   position: sticky;
-  top: var(--space-3);
+  top: var(--space-2);
   z-index: var(--z-topbar);
-  backdrop-filter: blur(8px);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
 }
 
-.topbar-controls { display: inline-flex; gap: var(--space-2); }
+.topbar-controls {
+  display: inline-flex;
+  gap: var(--space-2);
+  background: color-mix(in oklab, var(--surface-1), transparent 2%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0.28rem;
+  box-shadow: var(--shadow-soft);
+}
 
 .view-section { display: none; min-width: 0; gap: var(--space-4); align-content: start; }
-.view-section.active-view { display: grid; animation: fade-slide 240ms ease; }
+.view-section.active-view { display: grid; animation: fade-slide 220ms ease; }
 
 @keyframes fade-slide {
   from { opacity: 0; transform: translateY(8px); }
@@ -81,4 +91,5 @@
 
 @media (max-width: 760px) {
   .main-content { padding: var(--space-3); }
+  .topbar { justify-content: flex-start; }
 }
