@@ -81,6 +81,6 @@
   --text-xl: clamp(1.2rem, 1.1rem + 0.58vw, 1.56rem);
 
   --text-2xs: clamp(0.6rem, 0.58rem + 0.1vw, 0.68rem);
-  --text-kpi-value: clamp(0.9rem, 0.86rem + 0.42vw, 1.2rem);
-  --text-table: clamp(0.68rem, 0.65rem + 0.15vw, 0.78rem);
+  --text-kpi-value: clamp(0.82rem, 0.78rem + 0.32vw, 1.02rem);
+  --text-table: clamp(0.64rem, 0.62rem + 0.13vw, 0.72rem);
 }
