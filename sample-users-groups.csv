@@ -1,4 +1,4 @@
 email,firstname,lastname,role,groups
-alice.martin@example.com,Alice,Martin,user,"Finance;RH"
+alice.martin@example.com,Alice,Martin,user,"RH"
 bruno.dupont@example.com,Bruno,Dupont,user,"Finance"
-david.moreau@example.com,David,Moreau,admin,"IT;Admins"
+david.moreau@example.com,David,Moreau,admin,"IT"
