@@ -691,7 +691,7 @@ def _passbolt_api_services() -> tuple[Any, Any]:
     service = PassboltDeleteServiceV2(auth_service)
     return auth_service, service
 
-def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any = None) -> dict[str, Any]:
+def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any = None, ui_context: dict[str, Any] | None = None) -> dict[str, Any]:
     batch = get_batch(batch_uuid)
     if not batch:
         return {"error": "batch not found", "batch_uuid": batch_uuid}
@@ -733,8 +733,33 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
     )
 
     mode_label = "dry-run" if dry_run_only else "real-delete"
+    ui_context = ui_context or {}
+    ui_dry_run_state = bool(ui_context.get("ui_dry_run_state", dry_run_only))
+    confirmation_checked = bool(ui_context.get("confirmation_checked", False))
+    eligible_count = int(ui_context.get("eligible_count", 0) or 0)
+    requested_final_action = (
+        "simulation_only"
+        if dry_run_only
+        else ("real_delete_requested" if confirmation_checked else "real_delete_not_confirmed")
+    )
     if emit:
         emit({"type": "log", "message": f"{'Dry-run' if dry_run_only else 'Suppression réelle'} démarré(e) pour batch {batch_uuid} ({total} user(s))"})
+        emit(
+            {
+                "type": "log",
+                "message": json.dumps(
+                    {
+                        "batch_id": batch_uuid,
+                        "mode": mode_label,
+                        "ui_dry_run_state": ui_dry_run_state,
+                        "confirmation_checked": confirmation_checked,
+                        "eligible_count": eligible_count,
+                        "final_action": requested_final_action,
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        )
         emit({"type": "progress", "payload": {"current": 0, "total": max(total, 1), "percent": 0, "stage": "load-batch"}})
     _save_live_log("delete", "info", f"{'Dry-run' if dry_run_only else 'Suppression réelle'} batch {batch_uuid} started ({total} user(s))", batch_uuid=batch_uuid, event_code="delete.start", payload={"mode": mode_label, "batch_id": batch_uuid})
     log_delete_event(batch_uuid, "batch_selected", status="info", message=f"mode={mode_label}")
@@ -1643,6 +1668,13 @@ def delete_users_stream() -> Any:
     body = request.get_json(silent=True) or {}
     batch_uuid = (body.get("batch_uuid") or "").strip()
     dry_run_only = bool(body.get("dry_run_only", False))
+    ui_context = {
+        "ui_dry_run_state": body.get("ui_dry_run_state"),
+        "confirmation_checked": body.get("confirmation_checked"),
+        "eligible_count": body.get("eligible_count"),
+        "blocking_errors": body.get("blocking_errors"),
+        "has_deletable_status": body.get("has_deletable_status"),
+    }
 
     if not batch_uuid:
         latest = get_last_import_batch()
@@ -1657,7 +1689,7 @@ def delete_users_stream() -> Any:
         def emit(event: dict[str, Any]) -> None:
             events.append(event)
 
-        payload = process_delete_batch(batch_uuid, dry_run_only=dry_run_only, emit=emit)
+        payload = process_delete_batch(batch_uuid, dry_run_only=dry_run_only, emit=emit, ui_context=ui_context)
         for event in events:
             yield json.dumps(event, ensure_ascii=False) + "\n"
         yield json.dumps({"type": "final", "payload": payload}, ensure_ascii=False) + "\n"

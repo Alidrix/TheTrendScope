@@ -9,6 +9,9 @@ let deleteApiMessage = '';
 let previewHasEligible = false;
 let previewExecuted = false;
 let lastRunMode = 'dry-run';
+let lastAnalysisPayload = null;
+let lastEligibleCount = 0;
+let lastBlockingErrors = 0;
 
 const STATUS_META = {
   DRY_RUN_OK: { label: 'Éligible', tone: 'good' },
@@ -112,6 +115,11 @@ function appendTechLog(line) {
 }
 
 function renderEmptyAnalysis() {
+  lastAnalysisPayload = null;
+  lastEligibleCount = 0;
+  lastBlockingErrors = 0;
+  previewHasEligible = false;
+  previewExecuted = false;
   $('deleteAnalysisWrap').innerHTML = emptyState('Aucun batch analysé. Choisissez un batch puis lancez « Analyser ».');
   $('deleteSynthesis').innerHTML = '<div class="soft-empty">Exécutez un dry-run pour voir les comptes supprimables et les exclusions.</div>';
   $('deleteTargetSummary').innerHTML = '<div class="soft-empty">Aucune analyse en cours.</div>';
@@ -138,7 +146,13 @@ function renderRows(rows) {
       <td>${textCell(row.dry_run_status || '-')}</td>
       <td>${textCell(row.dry_run_details || '-')}</td>
       <td>${row.final_action_allowed ? '<span class=\"eligibility-tag good\">Autorisée</span>' : '<span class=\"eligibility-tag neutral\">Bloquée</span>'}</td>
-      <td>${row.final_action === 'real_delete_confirmed' ? '<span class="eligibility-tag good">Supprimé sur Passbolt</span>' : row.final_action === 'real_delete_not_confirmed' ? '<span class="eligibility-tag danger">Non supprimé côté Passbolt</span>' : '<span class="eligibility-tag neutral">Simulation</span>'}</td>
+      <td>${row.final_action === 'real_delete_confirmed'
+        ? '<span class="eligibility-tag good">Supprimé sur Passbolt</span>'
+        : row.final_action === 'real_delete_not_confirmed'
+          ? '<span class="eligibility-tag danger">Non supprimé côté Passbolt</span>'
+          : row.final_action === 'real_delete_requested'
+            ? '<span class="eligibility-tag warn">Suppression demandée</span>'
+            : '<span class="eligibility-tag neutral">Simulation</span>'}</td>
     </tr>`;
   }).join('');
   $('deleteAnalysisWrap').innerHTML = `<table><thead><tr><th>Email</th><th>Rôle</th><th>Batch</th><th>Statut</th><th>Raison</th><th>Dry-run</th><th>Détails dry-run</th><th>Action</th><th>Résultat Passbolt</th></tr></thead><tbody>${html}</tbody></table>`;
@@ -151,8 +165,12 @@ function renderSummary(payload) {
   const eligible = summary.eligible ?? rows.filter((r) => r.eligible).length;
   const excluded = summary.excluded ?? rows.filter((r) => !r.eligible).length;
   const errors = summary.errors ?? rows.filter((r) => ['ERROR', 'BLOCKED_BY_PASSBOLT'].includes(r.status)).length;
+  const hasDeletableStatus = rows.some((r) => r.status === 'DRY_RUN_OK' || r.eligible === true);
 
-  previewHasEligible = eligible > 0;
+  lastAnalysisPayload = payload;
+  lastEligibleCount = eligible;
+  lastBlockingErrors = errors;
+  previewHasEligible = hasDeletableStatus && eligible > 0;
   $('deletePreviewMini').textContent = `${eligible} éligibles / ${excluded} exclus`;
   $('deleteTargetSummary').innerHTML = `
     <div class="deletion-target-pill">Lignes batch: <strong>${payload.total || rows.length}</strong></div>
@@ -174,7 +192,7 @@ function renderSummary(payload) {
   if (outcome) {
     if (lastRunMode === 'dry-run') {
       outcome.className = 'deletion-banner simulation';
-      outcome.textContent = 'Simulation uniquement : aucune suppression réelle n’a été envoyée au serveur.';
+      outcome.textContent = 'Simulation uniquement : aucune suppression réelle n’a été envoyée.';
     } else if (confirmed > 0 && notConfirmed === 0) {
       outcome.className = 'deletion-banner success';
       outcome.textContent = 'Suppression confirmée : utilisateur absent après contrôle.';
@@ -189,11 +207,18 @@ function renderSummary(payload) {
 }
 
 function refreshExecuteButtonState() {
+  const dryRunChecked = Boolean($('deleteDryRunOnly')?.checked);
+  const confirmationChecked = Boolean($('deleteConfirm')?.checked);
+  const rows = lastAnalysisPayload?.results || [];
+  const hasDeletableStatus = rows.some((r) => r.status === 'DRY_RUN_OK' || r.eligible === true);
   const canExecute = previewExecuted
     && deleteApiConfigured
-    && previewHasEligible
-    && !$('deleteDryRunOnly')?.checked
-    && $('deleteConfirm')?.checked;
+    && !dryRunChecked
+    && confirmationChecked
+    && lastEligibleCount > 0
+    && lastBlockingErrors === 0
+    && hasDeletableStatus
+    && previewHasEligible;
   $('deleteExecuteBtn').disabled = !canExecute;
 }
 
@@ -217,14 +242,34 @@ export async function refreshDeleteConfig() {
 }
 
 async function runDeleteStream(previewOnly) {
+  const dryRunState = Boolean($('deleteDryRunOnly')?.checked);
+  const confirmationChecked = Boolean($('deleteConfirm')?.checked);
+  const rows = lastAnalysisPayload?.results || [];
+  const hasDeletableStatus = rows.some((r) => r.status === 'DRY_RUN_OK' || r.eligible === true);
+  const effectiveDryRun = previewOnly ? true : dryRunState;
   const selected = $('deleteBatchSelect').value;
-  const body = { dry_run_only: previewOnly ? true : false };
+  const body = { dry_run_only: effectiveDryRun };
   if (selected && selected !== '__latest__') body.batch_uuid = selected;
+  body.ui_dry_run_state = dryRunState;
+  body.confirmation_checked = confirmationChecked;
+  body.eligible_count = lastEligibleCount;
+  body.blocking_errors = lastBlockingErrors;
+  body.has_deletable_status = hasDeletableStatus;
   lastRunMode = body.dry_run_only ? 'dry-run' : 'real-delete';
 
   $('deletePreviewBtn').disabled = true;
   $('deleteExecuteBtn').disabled = true;
   $('deleteTechLogs').textContent = '';
+  appendTechLog(
+    `UI | ${JSON.stringify({
+      ui_dry_run_state: dryRunState,
+      confirmation_checked: confirmationChecked,
+      eligible_count: lastEligibleCount,
+      blocking_errors: lastBlockingErrors,
+      has_deletable_status: hasDeletableStatus,
+      final_action: effectiveDryRun ? 'simulation_only' : (confirmationChecked ? 'real_delete_requested' : 'real_delete_not_confirmed')
+    }, null, 0)}`
+  );
 
   try {
     const res = await fetch('/api/delete-users-stream', {
@@ -262,6 +307,9 @@ async function runDeleteStream(previewOnly) {
       $('deleteConfirm').checked = false;
       previewExecuted = false;
       previewHasEligible = false;
+      lastAnalysisPayload = null;
+      lastEligibleCount = 0;
+      lastBlockingErrors = 0;
       refreshExecuteButtonState();
       setToast('Suppression réelle terminée.');
     }
