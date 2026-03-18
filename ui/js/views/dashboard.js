@@ -82,7 +82,7 @@ export function renderDashboardView() {
     <div class="grid-health" id="healthGrid"></div>
     <div class="grid-main">
       <div class="card"><div class="section-header"><h3>Dernier import</h3></div><div id="lastImportBlock"></div></div>
-      <div class="card"><div class="section-header"><h3>Alertes</h3></div><div id="alertsBlock"></div></div>
+      <div class="card"><div id="alertsBlock"></div></div>
     </div>
     <div class="card"><div class="section-header"><h3>Activité récente</h3></div><div id="activityBlock"></div></div>
   `;

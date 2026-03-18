@@ -36,7 +36,6 @@ export function renderDeletionsView() {
     </div>
 
     <section class="card">
-      <div class="section-header"><h3>1 · Ciblage</h3></div>
       <div class="deletion-target-grid">
         <div><label>Batch à analyser</label><select id="deleteBatchSelect"></select></div>
         <div><label>Mode dry-run</label><label id="deleteDryRunToggle" class="toggle-control"><input id="deleteDryRunOnly" type="checkbox" checked/><span class="toggle-slider"></span><span class="toggle-text">Activé</span></label></div>
@@ -46,25 +45,21 @@ export function renderDeletionsView() {
     </section>
 
     <section class="card">
-      <div class="section-header"><h3>2 · Analyse</h3></div>
       <div id="deleteAnalysisWrap" class="table-wrap"></div>
     </section>
 
     <section class="card">
-      <div class="section-header"><h3>3 · Synthèse</h3></div>
       <div id="deleteSynthesis" class="deletion-synthesis-grid"></div>
     </section>
 
     <section class="card controlled-action-card">
-      <div class="section-header"><h3>4 · Exécution contrôlée</h3></div>
       <label class="confirm-control"><input id="deleteConfirm" type="checkbox"/> Je confirme vouloir lancer la suppression réelle des comptes éligibles.</label>
       <div class="action-bar mt-3"><button id="deleteExecuteBtn" class="btn btn-danger" disabled>Lancer la suppression réelle</button></div>
     </section>
 
-    <details class="card technical-logs" open>
-      <summary>5 · Journal technique</summary>
+    <section class="card technical-logs">
       <pre id="deleteTechLogs" class="console mt-3"></pre>
-    </details>
+    </section>
   `;
 
   updateDryRunToggle();
