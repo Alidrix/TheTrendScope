@@ -1,4 +1,4 @@
-# Passbolt Cockpit - Import d'utilisateur par .CSV
+# Passbolt Cockpit
 
 ## Vue d’ensemble
 
