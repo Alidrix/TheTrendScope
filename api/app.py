@@ -587,6 +587,22 @@ def _classify_request_error(error: Exception) -> str:
     return raw
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
 
 
 def _build_delete_result(
@@ -615,6 +631,10 @@ def _build_delete_result(
     delete_constraints_detected: str = "none",
     response_raw_path: str = "",
     debug_delete: dict[str, Any] | None = None,
+    ui_dry_run_state: bool | None = None,
+    backend_dry_run_state: bool | None = None,
+    confirmation_checked: bool | None = None,
+    eligible_count: int | None = None,
 ) -> dict[str, Any]:
     role = (actual_role or requested_role or "unknown").lower()
     return {
@@ -644,6 +664,10 @@ def _build_delete_result(
         "delete_constraints_detected": delete_constraints_detected,
         "response_raw_path": response_raw_path,
         "debug_delete": debug_delete or {},
+        "ui_dry_run_state": ui_dry_run_state,
+        "backend_dry_run_state": backend_dry_run_state,
+        "confirmation_checked": confirmation_checked,
+        "eligible_count": eligible_count,
     }
 
 
@@ -734,12 +758,15 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
 
     mode_label = "dry-run" if dry_run_only else "real-delete"
     ui_context = ui_context or {}
-    ui_dry_run_state = bool(ui_context.get("ui_dry_run_state", dry_run_only))
-    confirmation_checked = bool(ui_context.get("confirmation_checked", False))
+    ui_dry_run_state = _coerce_bool(ui_context.get("ui_dry_run_state"), dry_run_only)
+    backend_dry_run_state = bool(dry_run_only)
+    confirmation_checked = _coerce_bool(ui_context.get("confirmation_checked"), False)
     eligible_count = int(ui_context.get("eligible_count", 0) or 0)
+    blocking_errors = int(ui_context.get("blocking_errors", 0) or 0)
+    should_execute_real_delete = (not backend_dry_run_state) and confirmation_checked
     requested_final_action = (
         "simulation_only"
-        if dry_run_only
+        if backend_dry_run_state
         else ("real_delete_requested" if confirmation_checked else "real_delete_not_confirmed")
     )
     if emit:
@@ -752,8 +779,10 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
                         "batch_id": batch_uuid,
                         "mode": mode_label,
                         "ui_dry_run_state": ui_dry_run_state,
+                        "backend_dry_run_state": backend_dry_run_state,
                         "confirmation_checked": confirmation_checked,
                         "eligible_count": eligible_count,
+                        "blocking_errors": blocking_errors,
                         "final_action": requested_final_action,
                     },
                     ensure_ascii=False,
@@ -814,6 +843,10 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             "target_user_email": target_user_email,
             "target_user_id": target_user_id,
             "mode": mode_label,
+            "ui_dry_run_state": ui_dry_run_state,
+            "backend_dry_run_state": backend_dry_run_state,
+            "confirmation_checked": confirmation_checked,
+            "eligible_count": eligible_count,
             "final_action": final_action,
             "endpoint_called": endpoint_called,
             "http_method": http_method,
@@ -900,95 +933,104 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.filter.activated")
             continue
 
-        if emit:
+        if emit and backend_dry_run_state:
             emit({"type": "progress", "payload": {"current": index, "total": max(total, 1), "percent": round((index / max(total, 1)) * 100, 2), "stage": "dry-run"}})
-        dry_ok, dry_message, dry_payload = service.delete_user_dry_run(user_id)
-        dry_debug = _extract_delete_debug(dry_payload)
-        dry_details = parse_dry_run_details_v2(dry_payload) if parse_dry_run_details_v2 else {}
-        delete_constraint = _detect_delete_constraint(dry_message or "", dry_details)
-        if not dry_ok:
-            row = _build_delete_result(
-                email,
-                batch_uuid,
-                "BLOCKED_BY_PASSBOLT",
-                message=dry_message or "Dry-run rejected by Passbolt",
-                found=True,
-                user_id=user_id,
-                actual_role=actual_role,
-                activation_state=activation_state,
-                requested_role=requested_role,
-                eligible=False,
-                exclusion_reason="Blocage métier Passbolt",
-                dry_run_status="blocked",
-                dry_run_details=json.dumps(dry_details, ensure_ascii=False) if dry_details else (dry_message or "Dry-run rejected by Passbolt"),
-                mode=mode_label,
-                final_action="simulation_only" if dry_run_only else "real_delete_not_confirmed",
-                endpoint_called=dry_debug.get("endpoint_called", f"/users/{user_id}/dry-run.json"),
-                http_method=dry_debug.get("http_method", "DELETE"),
-                http_status=dry_debug.get("http_status"),
-                response_summary=dry_message,
-                user_exists_before=True,
-                user_exists_after=True,
-                delete_constraints_detected=delete_constraint,
-                debug_delete=dry_debug,
-            )
-            results.append(row)
-            _emit_delete_flow(
-                target_user_email=email,
-                target_user_id=user_id,
-                final_action=row["final_action"],
-                endpoint_called=row["endpoint_called"],
-                http_method=row["http_method"],
-                http_status=row["http_status"],
-                response_summary=row["response_summary"],
-                user_exists_before=True,
-                user_exists_after=True,
-                delete_constraints_detected=delete_constraint,
-            )
-            log_delete_event(batch_uuid, "dry_run", status=row["status"], message=row["message"], email=email)
-            _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.blocked", payload=dry_details or None)
-            continue
-
-        groups_to_check = dry_details.get("groups_to_delete") or dry_details.get("groups") or []
-        if isinstance(groups_to_check, list):
-            for group in groups_to_check:
-                if not isinstance(group, dict):
-                    continue
-                group_id = str(group.get("id") or group.get("group_id") or "")
-                if not group_id:
-                    continue
-                group_ok, group_message, group_payload = service.delete_group_dry_run(group_id)
-                if not group_ok:
-                    group_details = parse_dry_run_details_v2(group_payload) if parse_dry_run_details_v2 else {}
-                    row = _build_delete_result(
-                        email,
-                        batch_uuid,
-                        "BLOCKED_BY_PASSBOLT",
-                        message=f"Dry-run groupe bloquant: {group_message}",
-                        found=True,
-                        user_id=user_id,
-                        actual_role=actual_role,
-                        activation_state=activation_state,
-                        requested_role=requested_role,
-                        eligible=False,
-                        exclusion_reason="Blocage dry-run groupe",
-                        dry_run_status="blocked",
-                        dry_run_details=json.dumps({"user": dry_details, "group": group_details}, ensure_ascii=False),
-                    )
-                    results.append(row)
-                    log_delete_event(batch_uuid, "dry_run_group", status=row["status"], message=row["message"], email=email)
-                    _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.group.blocked", payload={"group_id": group_id, "details": group_details})
-                    break
-            else:
-                pass
-            if results and results[-1].get("email") == email and results[-1].get("status") == "BLOCKED_BY_PASSBOLT":
+        dry_debug: dict[str, Any] = {}
+        dry_details: dict[str, Any] = {}
+        delete_constraint = "none"
+        if backend_dry_run_state:
+            dry_ok, dry_message, dry_payload = service.delete_user_dry_run(user_id)
+            dry_debug = _extract_delete_debug(dry_payload)
+            dry_details = parse_dry_run_details_v2(dry_payload) if parse_dry_run_details_v2 else {}
+            delete_constraint = _detect_delete_constraint(dry_message or "", dry_details)
+            if not dry_ok:
+                row = _build_delete_result(
+                    email,
+                    batch_uuid,
+                    "BLOCKED_BY_PASSBOLT",
+                    message=dry_message or "Dry-run rejected by Passbolt",
+                    found=True,
+                    user_id=user_id,
+                    actual_role=actual_role,
+                    activation_state=activation_state,
+                    requested_role=requested_role,
+                    eligible=False,
+                    exclusion_reason="Blocage métier Passbolt",
+                    dry_run_status="blocked",
+                    dry_run_details=json.dumps(dry_details, ensure_ascii=False) if dry_details else (dry_message or "Dry-run rejected by Passbolt"),
+                    mode=mode_label,
+                    final_action="simulation_only",
+                    endpoint_called=dry_debug.get("endpoint_called", f"/users/{user_id}/dry-run.json"),
+                    http_method=dry_debug.get("http_method", "DELETE"),
+                    http_status=dry_debug.get("http_status"),
+                    response_summary=dry_message,
+                    user_exists_before=True,
+                    user_exists_after=True,
+                    delete_constraints_detected=delete_constraint,
+                    debug_delete=dry_debug,
+                    ui_dry_run_state=ui_dry_run_state,
+                    backend_dry_run_state=backend_dry_run_state,
+                    confirmation_checked=confirmation_checked,
+                    eligible_count=eligible_count,
+                )
+                results.append(row)
+                _emit_delete_flow(
+                    target_user_email=email,
+                    target_user_id=user_id,
+                    final_action=row["final_action"],
+                    endpoint_called=row["endpoint_called"],
+                    http_method=row["http_method"],
+                    http_status=row["http_status"],
+                    response_summary=row["response_summary"],
+                    user_exists_before=True,
+                    user_exists_after=True,
+                    delete_constraints_detected=delete_constraint,
+                )
+                log_delete_event(batch_uuid, "dry_run", status=row["status"], message=row["message"], email=email)
+                _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.blocked", payload=dry_details or None)
                 continue
 
-        log_delete_event(batch_uuid, "dry_run", status="ok", message="dry-run success", email=email)
-        _save_live_log("delete", "audit", "dry-run success", batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.success")
-        if emit:
-            emit({"type": "stdout", "message": f"dry-run ok: {email}"})
-        if dry_run_only:
+            groups_to_check = dry_details.get("groups_to_delete") or dry_details.get("groups") or []
+            if isinstance(groups_to_check, list):
+                for group in groups_to_check:
+                    if not isinstance(group, dict):
+                        continue
+                    group_id = str(group.get("id") or group.get("group_id") or "")
+                    if not group_id:
+                        continue
+                    group_ok, group_message, group_payload = service.delete_group_dry_run(group_id)
+                    if not group_ok:
+                        group_details = parse_dry_run_details_v2(group_payload) if parse_dry_run_details_v2 else {}
+                        row = _build_delete_result(
+                            email,
+                            batch_uuid,
+                            "BLOCKED_BY_PASSBOLT",
+                            message=f"Dry-run groupe bloquant: {group_message}",
+                            found=True,
+                            user_id=user_id,
+                            actual_role=actual_role,
+                            activation_state=activation_state,
+                            requested_role=requested_role,
+                            eligible=False,
+                            exclusion_reason="Blocage dry-run groupe",
+                            dry_run_status="blocked",
+                            dry_run_details=json.dumps({"user": dry_details, "group": group_details}, ensure_ascii=False),
+                            ui_dry_run_state=ui_dry_run_state,
+                            backend_dry_run_state=backend_dry_run_state,
+                            confirmation_checked=confirmation_checked,
+                            eligible_count=eligible_count,
+                        )
+                        results.append(row)
+                        log_delete_event(batch_uuid, "dry_run_group", status=row["status"], message=row["message"], email=email)
+                        _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.group.blocked", payload={"group_id": group_id, "details": group_details})
+                        break
+                if results and results[-1].get("email") == email and results[-1].get("status") == "BLOCKED_BY_PASSBOLT":
+                    continue
+
+            log_delete_event(batch_uuid, "dry_run", status="ok", message="dry-run success", email=email)
+            _save_live_log("delete", "audit", "dry-run success", batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.success")
+            if emit:
+                emit({"type": "stdout", "message": f"dry-run ok: {email}"})
             row = _build_delete_result(
                 email,
                 batch_uuid,
@@ -1013,6 +1055,10 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
                 user_exists_after=True,
                 delete_constraints_detected=delete_constraint,
                 debug_delete=dry_debug,
+                ui_dry_run_state=ui_dry_run_state,
+                backend_dry_run_state=backend_dry_run_state,
+                confirmation_checked=confirmation_checked,
+                eligible_count=eligible_count,
             )
             results.append(row)
             _emit_delete_flow(
@@ -1029,12 +1075,57 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             )
             continue
 
+        if not should_execute_real_delete:
+            row = _build_delete_result(
+                email,
+                batch_uuid,
+                "DRY_RUN_OK",
+                message="Suppression réelle non demandée (confirmation absente)",
+                found=True,
+                user_id=user_id,
+                actual_role=actual_role,
+                activation_state=activation_state,
+                requested_role=requested_role,
+                eligible=True,
+                dry_run_status="not_run",
+                dry_run_details="Dry-run désactivé",
+                final_action_allowed=False,
+                mode=mode_label,
+                final_action="real_delete_not_confirmed",
+                endpoint_called="",
+                http_method="",
+                http_status=None,
+                response_summary="Suppression réelle bloquée : confirmation non cochée",
+                user_exists_before=True,
+                user_exists_after=True,
+                delete_constraints_detected=delete_constraint,
+                ui_dry_run_state=ui_dry_run_state,
+                backend_dry_run_state=backend_dry_run_state,
+                confirmation_checked=confirmation_checked,
+                eligible_count=eligible_count,
+            )
+            results.append(row)
+            _emit_delete_flow(
+                target_user_email=email,
+                target_user_id=user_id,
+                final_action=row["final_action"],
+                endpoint_called="not_called",
+                http_method="N/A",
+                http_status=None,
+                response_summary=row["response_summary"],
+                user_exists_before=True,
+                user_exists_after=True,
+                delete_constraints_detected=delete_constraint,
+            )
+            continue
+
         if emit:
             emit({"type": "progress", "payload": {"current": index, "total": max(total, 1), "percent": round((index / max(total, 1)) * 100, 2), "stage": "delete"}})
         delete_ok, delete_message, delete_payload = service.delete_user(user_id)
         delete_debug = _extract_delete_debug(delete_payload)
+        delete_constraint = _detect_delete_constraint(delete_message or "", delete_payload if isinstance(delete_payload, dict) else {})
         if not delete_ok:
-            row = _build_delete_result(email, batch_uuid, "ERROR", message=delete_message or "Delete failed", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, eligible=True, dry_run_status="ok", dry_run_details=json.dumps(dry_details, ensure_ascii=False) if dry_details else "Dry-run validé", final_action_allowed=False, exclusion_reason="Erreur suppression réelle", mode=mode_label, final_action="real_delete_requested", endpoint_called=delete_debug.get("endpoint_called", f"/users/{user_id}.json"), http_method=delete_debug.get("http_method", "DELETE"), http_status=delete_debug.get("http_status"), response_summary=delete_message or "Delete failed", user_exists_before=True, user_exists_after=True, delete_constraints_detected=delete_constraint, debug_delete=delete_debug)
+            row = _build_delete_result(email, batch_uuid, "ERROR", message=delete_message or "Delete failed", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, eligible=True, dry_run_status="not_run", dry_run_details="Dry-run non exécuté en mode suppression réelle", final_action_allowed=False, exclusion_reason="Erreur suppression réelle", mode=mode_label, final_action="real_delete_requested", endpoint_called=delete_debug.get("endpoint_called", f"/users/{user_id}.json"), http_method=delete_debug.get("http_method", "DELETE"), http_status=delete_debug.get("http_status"), response_summary=delete_message or "Delete failed", user_exists_before=True, user_exists_after=True, delete_constraints_detected=delete_constraint, debug_delete=delete_debug, ui_dry_run_state=ui_dry_run_state, backend_dry_run_state=backend_dry_run_state, confirmation_checked=confirmation_checked, eligible_count=eligible_count)
             results.append(row)
             _emit_delete_flow(
                 target_user_email=email,
@@ -1059,7 +1150,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
         final_action = "real_delete_confirmed" if confirmed_deleted else "real_delete_not_confirmed"
         if confirmed_deleted:
             update_user_delete_state(batch_uuid=batch_uuid, email=email, activation_state="deleted", deletable_candidate=0)
-        row = _build_delete_result(email, batch_uuid, "DELETED" if confirmed_deleted else "ERROR", message="Suppression confirmée : utilisateur absent après contrôle." if confirmed_deleted else "Suppression demandée mais non confirmée côté Passbolt", found=True, user_id=user_id, actual_role=actual_role, activation_state="deleted" if confirmed_deleted else activation_state, requested_role=requested_role, eligible=True, dry_run_status="ok", dry_run_details=json.dumps(dry_details, ensure_ascii=False) if dry_details else "Dry-run validé", final_action_allowed=False, exclusion_reason="" if confirmed_deleted else "Suppression demandée mais non confirmée côté Passbolt", mode=mode_label, final_action=final_action, endpoint_called=delete_debug.get("endpoint_called", f"/users/{user_id}.json"), http_method=delete_debug.get("http_method", "DELETE"), http_status=delete_debug.get("http_status"), response_summary=delete_debug.get("response_summary", delete_message), user_exists_before=True, user_exists_after=user_exists_after, delete_constraints_detected=delete_constraint, debug_delete={**delete_debug, "post_delete_check": {"endpoint_called": f"/users/{user_id}.json", "http_method": "GET", "http_status": post_status, "response_summary": post_message, "user_exists_after": user_exists_after, "confirmed_deleted": confirmed_deleted}})
+        row = _build_delete_result(email, batch_uuid, "DELETED" if confirmed_deleted else "ERROR", message="Suppression confirmée : utilisateur absent après contrôle." if confirmed_deleted else "Suppression demandée mais non confirmée côté Passbolt", found=True, user_id=user_id, actual_role=actual_role, activation_state="deleted" if confirmed_deleted else activation_state, requested_role=requested_role, eligible=True, dry_run_status="not_run", dry_run_details="Dry-run non exécuté en mode suppression réelle", final_action_allowed=False, exclusion_reason="" if confirmed_deleted else "Suppression demandée mais non confirmée côté Passbolt", mode=mode_label, final_action=final_action, endpoint_called=delete_debug.get("endpoint_called", f"/users/{user_id}.json"), http_method=delete_debug.get("http_method", "DELETE"), http_status=delete_debug.get("http_status"), response_summary=delete_debug.get("response_summary", delete_message), user_exists_before=True, user_exists_after=user_exists_after, delete_constraints_detected=delete_constraint, debug_delete={**delete_debug, "post_delete_check": {"endpoint_called": f"/users/{user_id}.json", "http_method": "GET", "http_status": post_status, "response_summary": post_message, "user_exists_after": user_exists_after, "confirmed_deleted": confirmed_deleted}}, ui_dry_run_state=ui_dry_run_state, backend_dry_run_state=backend_dry_run_state, confirmation_checked=confirmation_checked, eligible_count=eligible_count)
         results.append(row)
         _emit_delete_flow(
             target_user_email=email,
@@ -1667,7 +1758,7 @@ def delete_batch_users() -> Any:
 def delete_users_stream() -> Any:
     body = request.get_json(silent=True) or {}
     batch_uuid = (body.get("batch_uuid") or "").strip()
-    dry_run_only = bool(body.get("dry_run_only", False))
+    dry_run_only = _coerce_bool(body.get("dry_run_only"), False)
     ui_context = {
         "ui_dry_run_state": body.get("ui_dry_run_state"),
         "confirmation_checked": body.get("confirmation_checked"),

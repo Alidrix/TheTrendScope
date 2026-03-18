@@ -212,11 +212,11 @@ function refreshExecuteButtonState() {
   const rows = lastAnalysisPayload?.results || [];
   const hasDeletableStatus = rows.some((r) => r.status === 'DRY_RUN_OK' || r.eligible === true);
   const canExecute = previewExecuted
-    && deleteApiConfigured
     && !dryRunChecked
     && confirmationChecked
     && lastEligibleCount > 0
     && lastBlockingErrors === 0
+    && Boolean(lastAnalysisPayload)
     && hasDeletableStatus
     && previewHasEligible;
   $('deleteExecuteBtn').disabled = !canExecute;
@@ -263,6 +263,7 @@ async function runDeleteStream(previewOnly) {
   appendTechLog(
     `UI | ${JSON.stringify({
       ui_dry_run_state: dryRunState,
+      backend_dry_run_state: effectiveDryRun,
       confirmation_checked: confirmationChecked,
       eligible_count: lastEligibleCount,
       blocking_errors: lastBlockingErrors,
@@ -294,6 +295,18 @@ async function runDeleteStream(previewOnly) {
         if (['log', 'stderr', 'stdout'].includes(event.type)) appendTechLog(`${event.type.toUpperCase()} | ${event.message}`);
         if (event.type === 'final') {
           const payload = event.payload || {};
+          appendTechLog(
+            `FINAL | ${JSON.stringify({
+              ui_dry_run_state: dryRunState,
+              backend_dry_run_state: Boolean(payload.dry_run_only),
+              confirmation_checked: confirmationChecked,
+              eligible_count: lastEligibleCount,
+              endpoint_called: (payload.results || []).map((r) => r.endpoint_called).filter(Boolean),
+              http_method: (payload.results || []).map((r) => r.http_method).filter(Boolean),
+              http_status: (payload.results || []).map((r) => r.http_status).filter((s) => s !== undefined),
+              final_action: (payload.results || []).map((r) => r.final_action),
+            }, null, 0)}`
+          );
           state.deletePreviewDone = true;
           previewExecuted = true;
           renderRows(payload.results || []);
