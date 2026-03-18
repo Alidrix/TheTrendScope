@@ -3,7 +3,6 @@ import { state } from '../state.js';
 import { $, escapeHtml, setToast, textCell } from '../utils.js';
 import { emptyState } from '../components/empty-state.js';
 import { statusChip } from '../components/status-chip.js';
-import { pageHeader } from '../components/page-header.js';
 
 let deleteApiConfigured = false;
 let deleteApiMessage = '';
@@ -29,8 +28,6 @@ const STATUS_META = {
 
 export function renderDeletionsView() {
   $('deletionsView').innerHTML = `
-    ${pageHeader('Suppressions', '', '<span id="deleteModeBadge" class="mode-badge">-</span>')}
-
     <div class="deletion-status-grid">
       <div class="status-mini-card"><span class="label">API Suppression</span><div id="deleteApiMini">${statusChip('check', 'Vérification...')}</div></div>
       <div class="status-mini-card"><span class="label">Batch sélectionné</span><strong id="deleteBatchMini">Dernier import</strong></div>
@@ -43,7 +40,7 @@ export function renderDeletionsView() {
       <div class="deletion-target-grid">
         <div><label>Batch à analyser</label><select id="deleteBatchSelect"></select></div>
         <div><label>Mode dry-run</label><label id="deleteDryRunToggle" class="toggle-control"><input id="deleteDryRunOnly" type="checkbox" checked/><span class="toggle-slider"></span><span class="toggle-text">Activé</span></label></div>
-        <div class="action-bar align-end"><button id="deletePreviewBtn" class="btn btn-secondary">Analyser</button></div>
+        <div class="action-bar align-end"><span id="deleteModeChipInline"></span><button id="deletePreviewBtn" class="btn btn-secondary">Analyser</button></div>
       </div>
       <div id="deleteTargetSummary" class="deletion-target-summary"></div>
     </section>
@@ -85,7 +82,7 @@ function updateDryRunToggle() {
   const text = $('deleteDryRunToggle')?.querySelector('.toggle-text');
   if (text) text.textContent = checked ? 'Activé' : 'Désactivé';
   $('deleteDryRunMini').textContent = checked ? 'Simulation' : 'Réel';
-  $('deleteModeBadge').innerHTML = checked ? statusChip('warning', 'Simulation') : statusChip('danger', 'Réel');
+  $('deleteModeChipInline').innerHTML = checked ? statusChip('warning', 'Simulation') : statusChip('danger', 'Réel');
   refreshExecuteButtonState();
 }
 

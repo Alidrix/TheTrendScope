@@ -15,7 +15,12 @@
 .dashboard-alert-line { border-radius: var(--radius-sm); padding: .55rem .65rem; border: 1px solid color-mix(in oklab, var(--warning), transparent 58%); background: color-mix(in oklab, var(--warning), transparent 92%); }
 
 .import-shell-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: var(--space-4); }
-.import-advanced { border: 1px dashed var(--border); border-radius: var(--radius-md); padding: var(--space-3); background: color-mix(in oklab, var(--surface-2), transparent 12%); }
+.import-inline-options {
+  display: grid;
+  grid-template-columns: minmax(0, 280px) auto;
+  gap: var(--space-2);
+  align-items: center;
+}
 
 .deletion-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); }
 .status-mini-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); background: color-mix(in oklab, var(--surface-2), transparent 10%); display: grid; gap: .3rem; }
@@ -30,9 +35,6 @@
 .synthesis-item { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-3); background: color-mix(in oklab, var(--surface-2), transparent 8%); display: grid; gap: 4px; }
 .synthesis-item span { font-size: var(--text-xs); color: var(--text-3); }
 .synthesis-item strong { font-size: var(--text-lg); }
-.mode-badge-wrap { display: flex; justify-content: flex-end; }
-.mode-badge { justify-self: end; }
-
 .eligibility-tag { display: inline-flex; border-radius: var(--radius-pill); border: 1px solid var(--border); font-size: var(--text-xs); padding: .2rem .55rem; }
 .eligibility-tag.good { color: var(--success); border-color: color-mix(in oklab, var(--success), transparent 55%); background: color-mix(in oklab, var(--success), transparent 90%); }
 .eligibility-tag.warn { color: var(--warning); border-color: color-mix(in oklab, var(--warning), transparent 55%); background: color-mix(in oklab, var(--warning), transparent 90%); }
@@ -79,5 +81,6 @@
   .deletion-target-grid,
   .master-detail,
   .audit-line,
-  .import-shell-grid { grid-template-columns: 1fr; }
+  .import-shell-grid,
+  .import-inline-options { grid-template-columns: 1fr; }
 }

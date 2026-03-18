@@ -4,11 +4,9 @@ import { $, escapeHtml, formatDate, setToast } from '../utils.js';
 import { emptyState } from '../components/empty-state.js';
 import { statusBadge } from '../components/status-chip.js';
 import { kpiCard } from '../components/kpi-card.js';
-import { pageHeader } from '../components/page-header.js';
 
 export function renderHistoryView() {
   $('historyView').innerHTML = `
-    ${pageHeader('Historique')}
     <div class="master-detail">
       <section class="card">
         <div class="form-grid">

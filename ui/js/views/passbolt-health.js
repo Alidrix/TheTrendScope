@@ -1,7 +1,6 @@
 import { apiGet } from '../api.js';
 import { $, escapeHtml, setToast } from '../utils.js';
 import { statusChip } from '../components/status-chip.js';
-import { pageHeader } from '../components/page-header.js';
 
 const STEP_COLORS = {
   success: 'operational',
@@ -99,7 +98,6 @@ function renderSummary(report) {
 
 export function renderPassboltHealthView() {
   $('passboltHealthView').innerHTML = `
-    ${pageHeader('Santé API Passbolt')}
     <div class="card">
       <div class="section-header">
         <h3>Diagnostic</h3>

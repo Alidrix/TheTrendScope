@@ -3,7 +3,6 @@ import { state } from '../state.js';
 import { $, escapeHtml, formatDate, setToast } from '../utils.js';
 import { emptyState } from '../components/empty-state.js';
 import { statusBadge, statusChip } from '../components/status-chip.js';
-import { pageHeader } from '../components/page-header.js';
 
 function normalizeStatus(kind) {
   const map = {
@@ -80,7 +79,6 @@ function deriveApiHealthStatus(deleteCfg) {
 
 export function renderDashboardView() {
   $('dashboardView').innerHTML = `
-    ${pageHeader('Dashboard')}
     <div class="grid-health" id="healthGrid"></div>
     <div class="grid-main">
       <div class="card"><div class="section-header"><h3>Dernier import</h3></div><div id="lastImportBlock"></div></div>

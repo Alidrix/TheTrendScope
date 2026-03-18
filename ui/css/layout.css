@@ -38,10 +38,10 @@
 
 .main-content {
   min-width: 0;
-  padding: var(--space-4) var(--space-5) var(--space-6);
+  padding: var(--space-2) var(--space-4) var(--space-5);
   display: grid;
   align-content: start;
-  gap: var(--space-4);
+  gap: var(--space-2);
 }
 
 .topbar {
@@ -67,7 +67,7 @@
   box-shadow: var(--shadow-soft);
 }
 
-.view-section { display: none; min-width: 0; gap: var(--space-4); align-content: start; }
+.view-section { display: none; min-width: 0; gap: var(--space-2); align-content: start; }
 .view-section.active-view { display: grid; animation: fade-slide 220ms ease; }
 
 @keyframes fade-slide {
@@ -85,11 +85,11 @@
     padding: var(--space-4);
   }
   .menu { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
-  .main-content { padding-top: var(--space-3); }
+  .main-content { padding-top: var(--space-2); }
   .topbar { top: 0; }
 }
 
 @media (max-width: 760px) {
-  .main-content { padding: var(--space-3); }
+  .main-content { padding: var(--space-2); }
   .topbar { justify-content: flex-start; }
 }

@@ -40,11 +40,20 @@
 .section-header p { color: var(--text-3); font-size: var(--text-sm); }
 
 .page-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  padding: 0;
+  margin: 0;
+}
+
+.page-label {
+  margin: 0;
+  font-size: var(--text-xs);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text-3);
 }
 
 .btn {
@@ -171,11 +180,17 @@ tr:hover td { background: color-mix(in oklab, var(--surface-2), transparent 8%);
   padding: 0.35rem 0.65rem;
   cursor: pointer;
 }
+.toggle-control.compact { padding: 0.2rem 0.5rem; font-size: var(--text-xs); }
 .toggle-control input { display: none; }
 .toggle-slider { width: 38px; height: 20px; border-radius: var(--radius-pill); background: color-mix(in oklab, var(--success), transparent 42%); position: relative; }
 .toggle-slider::after { content: ''; width: 16px; height: 16px; background: #fff; border-radius: 50%; position: absolute; top: 2px; left: 20px; transition: left 180ms ease; }
 .toggle-control.off .toggle-slider { background: color-mix(in oklab, var(--neutral), transparent 30%); }
 .toggle-control.off .toggle-slider::after { left: 2px; }
+
+.input-compact {
+  min-height: 34px;
+  padding: 0.35rem 0.65rem;
+}
 
 .notification-center {
   position: fixed;
