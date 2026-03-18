@@ -1181,23 +1181,42 @@ def health() -> Any:
     docker_check = next((check for check in checks if check.get("name") == "docker_sdk"), {})
     container_check = next((check for check in checks if check.get("name") == "container_selection"), {})
     cli_check = next((check for check in checks if check.get("name") == "cli_path_check"), {})
-    return jsonify(
+    response_payload = {
+        "status": "ok",
+        "container": diagnostics.get("resolved_container", PASSBOLT_CONTAINER),
+        "cli_path": diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH),
+        "timeout_seconds": IMPORT_COMMAND_TIMEOUT,
+        "total_timeout_seconds": IMPORT_TOTAL_TIMEOUT,
+        "docker": {
+            "sdk_ok": docker_check.get("ok", False),
+            "visible_containers": docker_check.get("visible_containers", 0),
+            "target_container_found": container_check.get("ok", False),
+            "cli_path_found": cli_check.get("ok", False),
+        },
+        "diagnostics": diagnostics,
+        "passbolt_api_module": _passbolt_api_module_status(),
+    }
+    raw_preview = json.dumps(
         {
-            "status": "ok",
-            "container": diagnostics.get("resolved_container", PASSBOLT_CONTAINER),
-            "cli_path": diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH),
-            "timeout_seconds": IMPORT_COMMAND_TIMEOUT,
-            "total_timeout_seconds": IMPORT_TOTAL_TIMEOUT,
-            "docker": {
-                "sdk_ok": docker_check.get("ok", False),
-                "visible_containers": docker_check.get("visible_containers", 0),
-                "target_container_found": container_check.get("ok", False),
-                "cli_path_found": cli_check.get("ok", False),
-            },
-            "diagnostics": diagnostics,
-            "passbolt_api_module": _passbolt_api_module_status(),
-        }
+            "status": response_payload.get("status"),
+            "container": response_payload.get("container"),
+            "cli_path": response_payload.get("cli_path"),
+            "docker": response_payload.get("docker"),
+        },
+        ensure_ascii=False,
+    )[:500]
+    _save_live_log(
+        "system",
+        "info",
+        "Dashboard/API import health probe served",
+        event_code="dashboard.import.health.probe",
+        payload={
+            "endpoint": request.path,
+            "http_status": 200,
+            "response_raw_preview": raw_preview,
+        },
     )
+    return jsonify(response_payload)
 
 
 @app.route("/api/health", methods=["GET"])

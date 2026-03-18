@@ -22,9 +22,53 @@ function renderHealthCard(item) {
   return `<div class="health-card"><h3 class="text-ellipsis">${escapeHtml(item?.label || '-')}</h3><div>${statusChip(status.chip, status.label)}</div><p class="muted text-ellipsis">${escapeHtml(item?.detail || '-')}</p></div>`;
 }
 
-function deriveApiImportStatus(health) {
-  if (!health?.ok) return { status: 'unknown', detail: 'Backend import non détecté' };
-  return { status: 'configured', detail: 'Configuration import détectée' };
+function shortRawMessage(raw) {
+  const text = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '-';
+  return text.length > 140 ? `${text.slice(0, 140)}…` : text;
+}
+
+function parseJsonSafely(text) {
+  if (!text) return {};
+  try { return JSON.parse(text); } catch { return {}; }
+}
+
+async function fetchProbe(endpoint) {
+  const checkedAt = new Date().toISOString();
+  try {
+    const res = await fetch(endpoint);
+    const raw = await res.text();
+    const payload = parseJsonSafely(raw);
+    console.info('[Dashboard][probe]', { endpoint, status: res.status, raw_response: raw });
+    return { endpoint, status: res.status, raw, payload, checkedAt };
+  } catch (error) {
+    const raw = String(error?.message || error || 'unknown error');
+    console.info('[Dashboard][probe][error]', { endpoint, status: 0, raw_response: raw });
+    return { endpoint, status: 0, raw, payload: {}, checkedAt };
+  }
+}
+
+function wasRecentImportSuccessful(latest) {
+  if (!latest) return false;
+  return Number(latest?.success_count || 0) > 0 || ['success', 'partial'].includes(String(latest?.status || '').toLowerCase());
+}
+
+function deriveApiImportStatus(probe, latestBatch) {
+  const payload = probe?.payload || {};
+  const statusCode = Number(probe?.status || 0);
+  const healthy = statusCode === 200 && (
+    payload?.ok === true
+    || payload?.status === 'ok'
+    || typeof payload?.docker === 'object'
+    || Boolean(payload?.diagnostics)
+  );
+  const recentImportOk = wasRecentImportSuccessful(latestBatch);
+  const checkedAtLabel = probe?.checkedAt ? formatDate(probe.checkedAt) : '-';
+  const baseDetail = `Endpoint: ${probe?.endpoint || '-'} | HTTP: ${statusCode || 'N/A'} | Vérif: ${checkedAtLabel} | Brut: ${shortRawMessage(probe?.raw)}`;
+
+  if (healthy) return { status: 'configured', detail: baseDetail };
+  if (recentImportOk) return { status: 'warning', detail: `${baseDetail} | Fallback: import récent réussi` };
+  return { status: 'unknown', detail: `${baseDetail} | Backend import non détecté` };
 }
 
 function deriveCliStatus(health) {
@@ -66,17 +110,19 @@ export function renderDashboardView() {
 
 export async function refreshDashboard() {
   try {
-    const [health, deleteCfg, dbSummary, batches, logsSummary] = await Promise.all([
-      apiGet('/api/health').catch(() => ({})),
+    const importHealthEndpoint = '/api/health';
+    const [healthProbe, deleteCfg, dbSummary, batches, logsSummary] = await Promise.all([
+      fetchProbe(importHealthEndpoint),
       apiGet('/api/delete-config-status').catch(() => ({})),
       apiGet('/api/db/summary').catch(() => ({})),
       apiGet('/api/batches').catch(() => ({ items: [] })),
       apiGet('/api/logs/summary').catch(() => ({}))
     ]);
+    const health = healthProbe?.payload || {};
     state.batches = batches?.items || [];
     const latest = dbSummary?.last_batch || state.batches[0];
 
-    const apiImport = deriveApiImportStatus(health);
+    const apiImport = deriveApiImportStatus(healthProbe, latest);
     const cliStatus = deriveCliStatus(health);
     const apiHealth = deriveApiHealthStatus(deleteCfg);
 
@@ -109,7 +155,8 @@ export async function refreshDashboard() {
         <button class="btn btn-secondary" data-target-view="historyView">Détails</button>
       </div>
     ` : emptyState('Aucun import.');
-    const alerts = [logsSummary?.by_level?.error ? `${logsSummary.by_level.error} critique` : '', !deleteCfg?.configured ? 'Delete API non configurée' : '', !health?.ok ? 'API Import indisponible' : ''].filter(Boolean);
+    const importUnavailable = normalizeStatus(apiImport?.status || 'unknown').chip === 'unknown';
+    const alerts = [logsSummary?.by_level?.error ? `${logsSummary.by_level.error} critique` : '', !deleteCfg?.configured ? 'Delete API non configurée' : '', importUnavailable ? 'API Import indisponible' : ''].filter(Boolean);
     $('alertsBlock').innerHTML = alerts.length ? `${alerts.map((a) => `<p class="line-clamp-2 text-break dashboard-alert-line">${escapeHtml(a)}</p>`).join('')}<div class="mt-3"><button class="btn btn-secondary" data-target-view="logsAuditView">Voir logs</button></div>` : emptyState('Aucune alerte.');
     $('activityBlock').innerHTML = state.batches.slice(0, 5).map((b) => `<div class="dashboard-activity-item"><p class="text-ellipsis"><strong>${escapeHtml(b.filename || 'Sans nom')}</strong></p><p class="muted text-ellipsis">${formatDate(b.created_at)}</p></div>`).join('') || emptyState('Aucune activité.');
     document.querySelectorAll('[data-target-view]').forEach((button) => {

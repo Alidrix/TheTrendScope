@@ -829,13 +829,13 @@ class PassboltApiAuthService:
         self._log(
             "info",
             "Calling /mfa/verify/totp.json",
-            session_object_reused=session_reused,
+            session_reused=session_reused,
+            csrf_cookie_present=before_cookies["csrfToken_present"],
+            passbolt_mfa_cookie_present=before_cookies["passbolt_mfa_present"],
+            x_csrf_header_sent=bool(headers.get("X-CSRF-Token")),
             cookies_before_mfa=before_cookies["names"],
-            csrfToken_present_before_mfa=before_cookies["csrfToken_present"],
-            passbolt_mfa_present_before_mfa=before_cookies["passbolt_mfa_present"],
             csrf_bootstrap=csrf_bootstrap,
-            csrfToken_present=bool(csrf_token),
-            x_csrf_token_header_sent=bool(headers.get("X-CSRF-Token")),
+            csrf_token_available_after_bootstrap=bool(csrf_token),
         )
 
         status, payload, raw, _ = self._request_json("POST", "/mfa/verify/totp.json", {"totp": code}, extra_headers=headers)
@@ -843,12 +843,13 @@ class PassboltApiAuthService:
         self._log(
             "info",
             "MFA verify response",
-            session_object_reused=session_reused,
+            session_reused=session_reused,
+            csrf_cookie_present=after_cookies["csrfToken_present"],
+            passbolt_mfa_cookie_present=after_cookies["passbolt_mfa_present"],
+            x_csrf_header_sent=bool(headers.get("X-CSRF-Token")),
             mfa_http_status=status,
             mfa_raw_response=raw,
             cookies_after_mfa=after_cookies["names"],
-            csrfToken_present_after_mfa=after_cookies["csrfToken_present"],
-            passbolt_mfa_present_after_mfa=after_cookies["passbolt_mfa_present"],
         )
         if status >= 400:
             self._last_mfa_status = "failed"
@@ -923,6 +924,8 @@ class PassboltApiAuthService:
         if not access_token:
             raise RuntimeError("Missing access_token after JWT login")
         self._log("info", "access_token extracted")
+        # Keep a single JWT token bound to the same persistent HTTP session for MFA + delete flow.
+        self._session.headers.update({"Authorization": f"Bearer {access_token}"})
 
         self._tokens = {
             "access_token": access_token,
@@ -939,7 +942,6 @@ class PassboltApiAuthService:
             body_json_sha256=request_diagnostics["body_json_sha256"],
             body_json_size=request_diagnostics["body_json_size"],
         )
-        self._session.headers.update({"Authorization": f"Bearer {access_token}"})
         return self._tokens
 
     def run_diagnostic(self) -> dict[str, Any]:
