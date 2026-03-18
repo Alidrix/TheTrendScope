@@ -98,7 +98,12 @@ function renderImportFinal(payload) {
   const cards = [['Utilisateurs créés', s.users_created || 0], ['Groupes créés', s.groups_created || 0], ['Groupes assignés', s.groups_assigned || 0], ['Erreurs', s.errors || 0], ['Batch', payload.batch_uuid || '-']];
   $('importSummaryCards').innerHTML = cards.map(([label, value]) => kpiCard(label, value)).join('');
   $('importResultsRows').innerHTML = state.latestImportResults.map((row) => {
-    const detail = [row.errors?.length ? `Erreurs: ${row.errors.join(' | ')}` : '', row.groups_created?.length ? `Groupes créés: ${row.groups_created.join(', ')}` : '', row.groups_assigned?.length ? `Groupes assignés: ${row.groups_assigned.join(', ')}` : ''].filter(Boolean).join(' • ') || '-';
+    const detail = [
+      row.group_messages?.length ? row.group_messages.join(' | ') : '',
+      row.errors?.length ? `Erreurs: ${row.errors.join(' | ')}` : '',
+      row.groups_created?.length ? `Groupes créés: ${row.groups_created.join(', ')}` : '',
+      row.groups_assigned?.length ? `Groupes assignés: ${row.groups_assigned.join(', ')}` : '',
+    ].filter(Boolean).join(' • ') || '-';
     return `<tr><td>${textCell(row.email)}</td><td>${statusBadge(row.user_create_status)}</td><td>${textCell((row.groups_requested || []).join(', '))}</td><td>${textCell(escapeHtml(detail))}</td></tr>`;
   }).join('');
 }

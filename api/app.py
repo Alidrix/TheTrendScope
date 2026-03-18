@@ -1237,11 +1237,21 @@ def _process_rows(
     groups_created_total = 0
     groups_assigned_total = 0
     groups_deferred_total = 0
+    technical_admin_user_id = ""
 
     _emit_structured(emit, "info", "import.start", "Import batch started", total_rows=len(rows), rollback_on_error=rollback_on_error)
     try:
         group_service.authenticate()
+        technical_admin_user_id = group_service.get_technical_admin_user_id()
         _emit_structured(emit, "audit", "groups.auth.success", "JWT login success for groups API", batch_uuid=batch_uuid)
+        _emit_structured(
+            emit,
+            "info",
+            "groups.technical_admin.resolved",
+            "Technical admin user_id resolved",
+            batch_uuid=batch_uuid,
+            technical_admin_user_id=technical_admin_user_id,
+        )
     except Exception as error:
         _emit_structured(emit, "error", "groups.auth.failed", "Groups API authentication failed", batch_uuid=batch_uuid, error=_classify_request_error(error))
 
@@ -1315,6 +1325,7 @@ def _process_rows(
             "groups_created": [],
             "groups_assigned": [],
             "groups_deferred": [],
+            "group_messages": [],
             "errors": [],
             "raw": user_result,
         }
@@ -1330,21 +1341,92 @@ def _process_rows(
             if _critical_error(user_result):
                 critical_error = True
 
+        row_user_obj: dict[str, Any] | None = None
+        row_user_lookup_error = ""
+        if user_result["returncode"] == 0:
+            try:
+                row_user_obj = group_service.find_user_by_email(email)
+            except Exception as error:
+                row_user_lookup_error = str(error)
+
         for group in row.get("groups", []):
             normalized = group.lower()
             group_item = known_groups.get(normalized)
+            group_exists_before = bool(group_item)
             if not group_item:
                 if emit:
                     emit({"type": "progress", "payload": {"current": index, "total": len(rows), "percent": int((index / max(len(rows), 1)) * 100), "stage": "create-group"}})
-                create_result = group_service.create_group(group)
+                if not technical_admin_user_id:
+                    ui_message = "Échec création groupe : aucun gestionnaire fourni"
+                    user_payload["errors"].append(ui_message)
+                    user_payload["group_messages"].append(ui_message)
+                    _emit_structured(
+                        emit,
+                        "error",
+                        "group.create.failed",
+                        "Group creation failed: technical admin unavailable",
+                        row=index,
+                        group=group,
+                        group_name=group,
+                        email=email,
+                        group_exists_before=group_exists_before,
+                        technical_admin_user_id=technical_admin_user_id,
+                        groups_users=[],
+                        manager_present=False,
+                        group_create_http_status=None,
+                        group_create_raw_response="technical admin user_id unavailable",
+                    )
+                    continue
+                additional_members: list[dict[str, Any]] = []
+                if user_result["returncode"] == 0:
+                    row_user_id = str((row_user_obj or {}).get("id") or "")
+                    if row_user_id:
+                        additional_members.append({"user_id": row_user_id, "is_admin": False})
+                create_result = group_service.create_group(group, technical_admin_user_id, additional_members=additional_members)
                 if create_result["returncode"] == 0:
                     groups_created_total += 1
                     user_payload["groups_created"].append(group)
                     created_groups_in_batch.add(group)
-                    _emit_structured(emit, "info", "group.create.success", "Group created", row=index, group=group, email=email)
+                    user_payload["group_messages"].append("Groupe créé avec manager technique")
+                    _emit_structured(
+                        emit,
+                        "info",
+                        "group.create.success",
+                        "Group created",
+                        row=index,
+                        group=group,
+                        group_name=group,
+                        email=email,
+                        group_exists_before=group_exists_before,
+                        technical_admin_user_id=create_result.get("technical_admin_user_id"),
+                        groups_users=create_result.get("groups_users"),
+                        manager_present=create_result.get("manager_present"),
+                        group_create_http_status=create_result.get("http_status"),
+                        group_create_raw_response=create_result.get("raw_response"),
+                    )
                 elif "already" not in (create_result.get("stderr", "").lower()):
-                    user_payload["errors"].append(f"group {group}: {create_result.get('stderr', 'creation failed')}")
-                    _emit_structured(emit, "error", "group.create.failed", "Group creation failed", row=index, group=group, email=email, stderr=create_result.get("stderr", ""))
+                    stderr = create_result.get("stderr", "")
+                    no_manager_error = "at_least_one_group_manager" in stderr.lower() or "gestionnaire" in stderr.lower()
+                    ui_message = "Échec création groupe : aucun gestionnaire fourni" if no_manager_error else f"group {group}: {stderr or 'creation failed'}"
+                    user_payload["errors"].append(ui_message)
+                    user_payload["group_messages"].append(ui_message)
+                    _emit_structured(
+                        emit,
+                        "error",
+                        "group.create.failed",
+                        "Group creation failed",
+                        row=index,
+                        group=group,
+                        group_name=group,
+                        email=email,
+                        stderr=stderr,
+                        group_exists_before=group_exists_before,
+                        technical_admin_user_id=create_result.get("technical_admin_user_id"),
+                        groups_users=create_result.get("groups_users"),
+                        manager_present=create_result.get("manager_present"),
+                        group_create_http_status=create_result.get("http_status"),
+                        group_create_raw_response=create_result.get("raw_response"),
+                    )
                     continue
                 try:
                     lookup_group = group_service.get_group_by_name(group)
@@ -1358,6 +1440,26 @@ def _process_rows(
                     continue
                 group_item = lookup_group
                 known_groups[normalized] = group_item
+                if additional_members:
+                    user_payload["groups_assigned"].append(group)
+                    groups_assigned_total += 1
+                    _emit_structured(
+                        emit,
+                        "info",
+                        "group.assign.success",
+                        "User attached at group creation",
+                        row=index,
+                        group=group,
+                        group_name=group,
+                        email=email,
+                        group_exists_before=group_exists_before,
+                        technical_admin_user_id=create_result.get("technical_admin_user_id"),
+                        groups_users=create_result.get("groups_users"),
+                        manager_present=create_result.get("manager_present"),
+                        group_create_http_status=create_result.get("http_status"),
+                        group_create_raw_response=create_result.get("raw_response"),
+                    )
+                    continue
 
             if emit:
                 emit({"type": "progress", "payload": {"current": index, "total": len(rows), "percent": int((index / max(len(rows), 1)) * 100), "stage": "assign-group"}})
@@ -1369,17 +1471,15 @@ def _process_rows(
                 _emit_structured(emit, "warning", "group.defer", "Group assignment deferred", row=index, group=group, email=email, reason="user creation failed")
                 continue
 
-            try:
-                user_obj = group_service.find_user_by_email(email)
-            except Exception as error:
-                reason = str(error)
+            if row_user_lookup_error:
+                reason = row_user_lookup_error
                 user_payload["groups_deferred"].append(group)
                 groups_deferred_total += 1
                 _append_pending({"email": email, "group": group, "reason": reason, "status": "deferred"})
                 _emit_structured(emit, "warning", "group.assign.deferred", "Group assignment deferred", row=index, group=group, email=email, reason=reason)
                 continue
 
-            user_id = str((user_obj or {}).get("id") or "")
+            user_id = str((row_user_obj or {}).get("id") or "")
             group_id = str((group_item or {}).get("id") or "")
             if not user_id or not group_id:
                 reason = "missing user_id/group_id"
@@ -1393,6 +1493,7 @@ def _process_rows(
             if assign_result["returncode"] == 0:
                 user_payload["groups_assigned"].append(group)
                 groups_assigned_total += 1
+                user_payload["group_messages"].append("Utilisateur ajouté au groupe existant")
                 _emit_structured(emit, "info", "group.assign.success", "Group assigned", row=index, group=group, email=email)
             else:
                 reason = assign_result.get("stderr") or "user not active yet"

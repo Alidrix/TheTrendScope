@@ -1437,6 +1437,7 @@ class PassboltApiAuthService:
 class PassboltGroupService:
     def __init__(self, auth_service: PassboltApiAuthService) -> None:
         self.auth = auth_service
+        self._technical_admin_user_id: str | None = None
 
     def enabled(self) -> bool:
         return self.auth.enabled()
@@ -1478,9 +1479,54 @@ class PassboltGroupService:
                 return item
         return None
 
-    def create_group(self, group_name: str) -> dict[str, Any]:
-        status, _, message = self._request("POST", "/groups.json", {"name": group_name})
-        return {"returncode": 0 if status < 300 else 1, "stdout": "created" if status < 300 else "", "stderr": "" if status < 300 else message}
+    def get_technical_admin_user_id(self) -> str:
+        if self._technical_admin_user_id:
+            return self._technical_admin_user_id
+        status, payload, message = self._request("GET", "/users/me.json")
+        user_id = ""
+        if status < 400:
+            body = payload.get("body") if isinstance(payload, dict) and isinstance(payload.get("body"), dict) else payload
+            if isinstance(body, dict):
+                user_id = str(body.get("id") or "")
+        if not user_id:
+            user_id = str(getattr(self.auth, "user_id", "") or "")
+        if not user_id:
+            raise RuntimeError(message or "technical admin user_id unavailable")
+        self._technical_admin_user_id = user_id
+        return user_id
+
+    def create_group(
+        self,
+        group_name: str,
+        technical_admin_user_id: str,
+        additional_members: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        manager_entry = {"user_id": technical_admin_user_id, "is_admin": True}
+        groups_users: list[dict[str, Any]] = [manager_entry]
+        if isinstance(additional_members, list):
+            for member in additional_members:
+                if not isinstance(member, dict):
+                    continue
+                user_id = str(member.get("user_id") or "")
+                if not user_id or user_id == technical_admin_user_id:
+                    continue
+                groups_users.append({"user_id": user_id, "is_admin": bool(member.get("is_admin", False))})
+        payload = {"name": group_name, "groups_users": groups_users}
+        manager_present = any(bool(member.get("is_admin")) for member in groups_users)
+        status, data, raw, _ = self.auth._request_json("POST", "/groups.json", payload)  # noqa: SLF001
+        message = _extract_message(data, raw)
+        return {
+            "returncode": 0 if status < 300 else 1,
+            "stdout": "created" if status < 300 else "",
+            "stderr": "" if status < 300 else message,
+            "http_status": status,
+            "group_name": group_name,
+            "technical_admin_user_id": technical_admin_user_id,
+            "groups_users": groups_users,
+            "manager_present": manager_present,
+            "raw_response": raw,
+            "response_payload": data,
+        }
 
     def find_user_by_email(self, email: str) -> dict[str, Any] | None:
         status, payload, message = self._request("GET", f"/users.json?filter[search]={quote(email)}")
