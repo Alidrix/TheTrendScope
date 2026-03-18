@@ -31,7 +31,7 @@ export function renderLogsView() {
       </div>
       <div id="summaryTab" class="tab-panel active logs-summary"></div>
       <div id="streamTab" class="tab-panel"><div id="logsStreamWrap" class="logs-stream-box"><pre id="logsStream" class="console logs-stream-console"></pre></div></div>
-      <div id="tableTab" class="tab-panel"><div class="table-wrap"><table class="logs-table"><thead><tr><th>Date</th><th>Scope</th><th>Niveau</th><th>Batch</th><th>Email</th><th>Message</th></tr></thead><tbody id="logsRows"></tbody></table></div><div id="logsTableState" class="mt-3"></div></div>
+      <div id="tableTab" class="tab-panel"><div class="table-wrap logs-table-wrap"><table class="logs-table logs-table-compact"><thead><tr><th>Date</th><th>Scope</th><th>Niveau</th><th>Batch</th><th>Email</th><th>Message</th></tr></thead><tbody id="logsRows"></tbody></table></div><div id="logsTableState" class="mt-3"></div></div>
       <div id="auditTab" class="tab-panel"></div>
     </div>
   `;
@@ -67,7 +67,7 @@ function updateFiltersBatches(batches = []) {
 
 function renderSummary(summary = {}, rows = []) {
   $('summaryTab').innerHTML = `
-    <div class="grid-kpi">
+    <div class="grid-kpi logs-summary-grid">
       ${kpiCard('Total logs', summary.total_logs || 0)}
       ${kpiCard('Erreurs', summary.by_level?.error || 0)}
       ${kpiCard('Warnings', summary.by_level?.warning || 0)}

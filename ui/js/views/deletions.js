@@ -39,7 +39,7 @@ export function renderDeletionsView() {
       <div class="deletion-target-grid">
         <div><label>Batch à analyser</label><select id="deleteBatchSelect"></select></div>
         <div><label>Mode dry-run</label><label id="deleteDryRunToggle" class="toggle-control"><input id="deleteDryRunOnly" type="checkbox" checked/><span class="toggle-slider"></span><span class="toggle-text">Activé</span></label></div>
-        <div class="action-bar align-end"><span id="deleteModeChipInline"></span><button id="deletePreviewBtn" class="btn btn-secondary">Analyser</button></div>
+        <div class="action-bar align-end"><button id="deletePreviewBtn" class="btn btn-secondary">Analyser</button></div>
       </div>
       <div id="deleteTargetSummary" class="deletion-target-summary"></div>
     </section>
@@ -76,8 +76,7 @@ function updateDryRunToggle() {
   $('deleteDryRunToggle')?.classList.toggle('off', !checked);
   const text = $('deleteDryRunToggle')?.querySelector('.toggle-text');
   if (text) text.textContent = checked ? 'Activé' : 'Désactivé';
-  $('deleteDryRunMini').textContent = checked ? 'Simulation' : 'Réel';
-  $('deleteModeChipInline').innerHTML = checked ? statusChip('warning', 'Simulation') : statusChip('danger', 'Réel');
+  $('deleteDryRunMini').textContent = checked ? 'Activé' : 'Désactivé';
   refreshExecuteButtonState();
 }
 
@@ -129,7 +128,7 @@ function renderRows(rows) {
           ? '<span class="eligibility-tag danger">Non supprimé côté Passbolt</span>'
           : row.final_action === 'real_delete_requested'
             ? '<span class="eligibility-tag warn">Suppression demandée</span>'
-            : '<span class="eligibility-tag neutral">Simulation</span>'}</td>
+            : '<span class="muted">—</span>'}</td>
     </tr>`;
   }).join('');
   $('deleteAnalysisWrap').innerHTML = `<table><thead><tr><th>Email</th><th>Rôle</th><th>Batch</th><th>Statut</th><th>Raison</th><th>Dry-run</th><th>Détails dry-run</th><th>Action</th><th>Résultat Passbolt</th></tr></thead><tbody>${html}</tbody></table>`;
