@@ -37,6 +37,10 @@ from db import (
     purge_logs,
     save_log,
     save_imported_user,
+    list_batch_groups,
+    list_pending_group_assignments,
+    upsert_batch_group,
+    upsert_pending_group_assignment,
     update_user_delete_state,
 )
 
@@ -460,6 +464,17 @@ def _critical_error(result: dict[str, Any]) -> bool:
 def _append_pending(entry: dict[str, Any]) -> None:
     with PENDING_LOCK:
         PENDING_ASSIGNMENTS.append(entry)
+    batch_uuid = str(entry.get("batch_uuid") or "").strip()
+    if batch_uuid:
+        upsert_pending_group_assignment(
+            batch_uuid=batch_uuid,
+            email=str(entry.get("email") or ""),
+            user_id=str(entry.get("user_id") or "") or None,
+            group_name=str(entry.get("group") or ""),
+            group_id=str(entry.get("group_id") or "") or None,
+            status=str(entry.get("status") or "pending_activation_before_group_attach"),
+            deferred_reason=str(entry.get("reason") or ""),
+        )
 
 
 def _is_user_operational(user_obj: dict[str, Any] | None) -> bool:
@@ -501,6 +516,15 @@ def _log_group_assignment_trace(
     deferred_reason: str,
     raw_response_group_create: Any,
     raw_response_group_assign: Any,
+    group_id: str = "",
+    group_created_by_batch: bool = False,
+    service_account_added_as_temporary_manager: bool = False,
+    user_promoted_to_group_manager: bool = False,
+    service_account_removed_from_group: bool = False,
+    group_delete_attempted: bool = False,
+    group_delete_http_status: int | None = None,
+    group_delete_block_reason: str = "",
+    final_group_state: str = "",
 ) -> None:
     _emit_structured(
         emit,
@@ -513,14 +537,76 @@ def _log_group_assignment_trace(
         user_id=user_id,
         user_active=user_active,
         group_name=group_name,
+        group_id=group_id,
+        group_created_by_batch=group_created_by_batch,
+        service_account_added_as_temporary_manager=service_account_added_as_temporary_manager,
         group_exists_before=group_exists_before,
         group_created=group_created,
         group_assignment_attempted=group_assignment_attempted,
         group_assignment_deferred=group_assignment_deferred,
         deferred_reason=deferred_reason,
+        user_promoted_to_group_manager=user_promoted_to_group_manager,
+        service_account_removed_from_group=service_account_removed_from_group,
+        group_delete_attempted=group_delete_attempted,
+        group_delete_http_status=group_delete_http_status,
+        group_delete_block_reason=group_delete_block_reason,
+        final_group_state=final_group_state,
         raw_response_group_create=raw_response_group_create,
         raw_response_group_assign=raw_response_group_assign,
     )
+
+
+def _promote_and_cleanup_temporary_manager(
+    *,
+    group_service: Any,
+    emit: Any,
+    batch_uuid: str,
+    row: int,
+    group_name: str,
+    group_id: str,
+    service_account_user_id: str,
+    active_user_id: str,
+    user_email: str,
+) -> dict[str, bool]:
+    promoted = False
+    removed = False
+    promote_result = group_service.promote_user_to_group_manager(group_id, active_user_id)
+    if promote_result.get("returncode") == 0:
+        promoted = True
+        remove_result = group_service.remove_user_from_group(group_id, service_account_user_id)
+        removed = remove_result.get("returncode") == 0
+        _emit_structured(
+            emit,
+            "info" if removed else "warning",
+            "group.manager.transfer",
+            "Manager transferred and temporary service account cleanup attempted",
+            row=row,
+            batch_uuid=batch_uuid,
+            group_name=group_name,
+            group_id=group_id,
+            user_email=user_email,
+            user_id=active_user_id,
+            user_promoted_to_group_manager=promoted,
+            service_account_removed_from_group=removed,
+            service_account_remove_error=remove_result.get("stderr", ""),
+        )
+    else:
+        _emit_structured(
+            emit,
+            "warning",
+            "group.manager.transfer.skipped",
+            "Unable to promote a group manager for cleanup",
+            row=row,
+            batch_uuid=batch_uuid,
+            group_name=group_name,
+            group_id=group_id,
+            user_email=user_email,
+            user_id=active_user_id,
+            user_promoted_to_group_manager=False,
+            service_account_removed_from_group=False,
+            promote_error=promote_result.get("stderr", ""),
+        )
+    return {"user_promoted_to_group_manager": promoted, "service_account_removed_from_group": removed}
 
 
 
@@ -793,6 +879,7 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             "module": _passbolt_api_module_status(),
             "results": [],
         }
+    group_service_for_delete = PassboltGroupServiceV2(auth_service) if PassboltGroupServiceV2 is not None else None
     results: list[dict[str, Any]] = []
     auth_service._logger = lambda level, message, **details: _save_live_log(  # noqa: SLF001
         "delete",
@@ -1229,7 +1316,77 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
         log_delete_event(batch_uuid, "delete", status=row["status"], message=row["message"], email=email)
         _save_live_log("delete", "audit", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.execute.success")
         if emit:
-            emit({"type": "stdout", "message": f"{'deleted+confirmed' if confirmed_deleted else 'delete-not-confirmed'}: {email}"})
+            emit({"type": "stdout", "message": f"{'Utilisateur supprimé' if confirmed_deleted else 'Suppression utilisateur non confirmée'}: {email}"})
+
+    if not dry_run_only and group_service_for_delete is not None:
+        tracked_groups = [g for g in list_batch_groups(batch_uuid) if int(g.get("group_created_by_batch") or 0) == 1]
+        batch_user_ids = {str(u.get("passbolt_user_id") or "") for u in users if u.get("passbolt_user_id")}
+        service_account_id = ""
+        try:
+            service_account_id = group_service_for_delete.get_technical_admin_user_id()
+        except Exception:
+            service_account_id = ""
+        for tracked in tracked_groups:
+            group_id = str(tracked.get("group_id") or "")
+            group_name = str(tracked.get("group_name") or "")
+            if not group_id:
+                continue
+            delete_attempted = False
+            delete_http_status = None
+            delete_block_reason = ""
+            final_group_state = "active_members_present"
+            try:
+                group_payload = group_service_for_delete.get_group(group_id) or {}
+                members = group_payload.get("groups_users") if isinstance(group_payload.get("groups_users"), list) else []
+                active_members = [
+                    str(m.get("user_id") or "")
+                    for m in members
+                    if isinstance(m, dict) and not m.get("delete")
+                ]
+                useful_batch_members = [uid for uid in active_members if uid in batch_user_ids]
+                only_service_account = bool(service_account_id) and active_members == [service_account_id]
+                if only_service_account or not useful_batch_members:
+                    delete_attempted = True
+                    ok, message, payload, http_status = service.delete_group(group_id)
+                    delete_http_status = http_status
+                    if ok:
+                        final_group_state = "deleted"
+                    else:
+                        delete_block_reason = message or "delete refused"
+                        final_group_state = "delete_blocked"
+            except Exception as error:
+                delete_attempted = True
+                delete_block_reason = str(error)
+                final_group_state = "delete_blocked"
+
+            upsert_batch_group(
+                batch_uuid=batch_uuid,
+                group_name=group_name,
+                group_id=group_id,
+                group_created_by_batch=1,
+                final_group_state=final_group_state,
+            )
+            _save_live_log(
+                "delete",
+                "info" if final_group_state in {"active_members_present", "deleted"} else "warning",
+                "Batch group cleanup evaluated",
+                batch_uuid=batch_uuid,
+                event_code="delete.group.cleanup",
+                payload={
+                    "group_name": group_name,
+                    "group_id": group_id,
+                    "group_created_by_batch": True,
+                    "group_delete_attempted": delete_attempted,
+                    "group_delete_http_status": delete_http_status,
+                    "group_delete_block_reason": delete_block_reason,
+                    "final_group_state": final_group_state,
+                },
+            )
+            if emit and delete_attempted:
+                if final_group_state == "deleted":
+                    emit({"type": "stdout", "message": f"Groupe batch supprimé: {group_name}"})
+                elif final_group_state == "delete_blocked":
+                    emit({"type": "stderr", "message": f"Groupe batch conservé : blocage Passbolt (owner de ressources/dossier) [{group_name}] {delete_block_reason}"})
 
     status = "success" if all(item["status"] in {"DELETED", "DRY_RUN_OK", "SKIPPED_ADMIN", "SKIPPED_NOT_TOOL_MANAGED", "SKIPPED_ACTIVE_USER", "NOT_FOUND", "BLOCKED_BY_PASSBOLT"} for item in results) else "partial"
     if emit:
@@ -1460,7 +1617,15 @@ def _process_rows(
                     groups_created_total += 1
                     user_payload["groups_created"].append(group)
                     created_groups_in_batch.add(group)
-                    user_payload["group_messages"].append("Groupe créé avec manager technique")
+                    user_payload["group_messages"].append("Groupe créé avec manager temporaire")
+                    upsert_batch_group(
+                        batch_uuid=batch_uuid,
+                        group_name=group,
+                        group_id=str((create_result.get("response_payload", {}).get("body", {}) or {}).get("id") or ""),
+                        group_created_by_batch=1,
+                        service_account_added_as_temporary_manager=1,
+                        final_group_state="temporary_manager_only",
+                    )
                     _emit_structured(
                         emit,
                         "info",
@@ -1564,6 +1729,15 @@ def _process_rows(
                     continue
                 group_item = lookup_group
                 known_groups[normalized] = group_item
+            if group_item:
+                upsert_batch_group(
+                    batch_uuid=batch_uuid,
+                    group_name=group,
+                    group_id=str((group_item or {}).get("id") or ""),
+                    group_created_by_batch=1 if group in created_groups_in_batch else 0,
+                    service_account_added_as_temporary_manager=1 if group in created_groups_in_batch else 0,
+                    final_group_state="temporary_manager_only" if group in created_groups_in_batch else "active_members_present",
+                )
 
             if emit:
                 emit({"type": "progress", "payload": {"current": index, "total": len(rows), "percent": int((index / max(len(rows), 1)) * 100), "stage": "assign-group"}})
@@ -1577,12 +1751,13 @@ def _process_rows(
                 user_payload["groups_deferred"].append(group)
                 groups_deferred_total += 1
                 _append_pending({
+                    "batch_uuid": batch_uuid,
                     "email": email,
                     "user_id": row_user_id,
                     "group": group,
                     "group_assignment_deferred": True,
                     "reason": "user_creation_failed",
-                    "status": "deferred",
+                    "status": "pending_activation_before_group_attach",
                 })
                 _log_group_assignment_trace(
                     emit,
@@ -1607,12 +1782,13 @@ def _process_rows(
                 user_payload["groups_deferred"].append(group)
                 groups_deferred_total += 1
                 _append_pending({
+                    "batch_uuid": batch_uuid,
                     "email": email,
                     "user_id": row_user_id,
                     "group": group,
                     "group_assignment_deferred": True,
                     "reason": "user_lookup_failed",
-                    "status": "deferred",
+                    "status": "pending_activation_before_group_attach",
                     "details": reason,
                 })
                 _log_group_assignment_trace(
@@ -1640,12 +1816,13 @@ def _process_rows(
                 user_payload["groups_deferred"].append(group)
                 groups_deferred_total += 1
                 _append_pending({
+                    "batch_uuid": batch_uuid,
                     "email": email,
                     "user_id": user_id,
                     "group": group,
                     "group_assignment_deferred": True,
                     "reason": "missing_user_or_group_id",
-                    "status": "deferred",
+                    "status": "pending_activation_before_group_attach",
                 })
                 _log_group_assignment_trace(
                     emit,
@@ -1668,17 +1845,17 @@ def _process_rows(
             if not user_active:
                 deferred_reason = "user_not_active_yet"
                 user_payload["groups_deferred"].append(group)
-                user_payload["group_messages"].append("Utilisateur créé mais non encore activé : ajout au groupe différé")
-                user_payload["group_messages"].append("Réessayer l’assignation après activation du compte")
+                user_payload["group_messages"].append("Utilisateur créé, affectation groupe en attente d’activation")
                 groups_deferred_total += 1
                 _append_pending({
+                    "batch_uuid": batch_uuid,
                     "email": email,
                     "user_id": user_id,
                     "group": group,
                     "group_id": group_id,
                     "group_assignment_deferred": True,
                     "reason": deferred_reason,
-                    "status": "deferred",
+                    "status": "pending_activation_before_group_attach",
                 })
                 _log_group_assignment_trace(
                     emit,
@@ -1703,6 +1880,39 @@ def _process_rows(
                 user_payload["groups_assigned"].append(group)
                 groups_assigned_total += 1
                 user_payload["group_messages"].append("Utilisateur ajouté au groupe")
+                upsert_pending_group_assignment(
+                    batch_uuid=batch_uuid,
+                    email=email,
+                    user_id=user_id,
+                    group_name=group,
+                    group_id=group_id,
+                    status="group_attached",
+                    deferred_reason="",
+                )
+                transfer_state = _promote_and_cleanup_temporary_manager(
+                    group_service=group_service,
+                    emit=emit,
+                    batch_uuid=batch_uuid,
+                    row=index,
+                    group_name=group,
+                    group_id=group_id,
+                    service_account_user_id=technical_admin_user_id,
+                    active_user_id=user_id,
+                    user_email=email,
+                )
+                if transfer_state["user_promoted_to_group_manager"] and transfer_state["service_account_removed_from_group"]:
+                    user_payload["group_messages"].append("Manager transféré, compte de service retiré")
+                upsert_batch_group(
+                    batch_uuid=batch_uuid,
+                    group_name=group,
+                    group_id=group_id,
+                    group_created_by_batch=1 if group in created_groups_in_batch else 0,
+                    service_account_added_as_temporary_manager=1 if group in created_groups_in_batch else 0,
+                    user_promoted_to_group_manager=1 if transfer_state["user_promoted_to_group_manager"] else 0,
+                    promoted_user_id=user_id if transfer_state["user_promoted_to_group_manager"] else None,
+                    service_account_removed_from_group=1 if transfer_state["service_account_removed_from_group"] else 0,
+                    final_group_state="active_members_present",
+                )
                 _log_group_assignment_trace(
                     emit,
                     row=index,
@@ -1760,16 +1970,16 @@ def _process_rows(
                 groups_deferred_total += 1
                 deferred_reason = "user_not_active_yet" if "user_id" in reason.lower() or "active" in reason.lower() else "assign_failed"
                 if deferred_reason == "user_not_active_yet":
-                    user_payload["group_messages"].append("Utilisateur créé mais non encore activé : ajout au groupe différé")
-                    user_payload["group_messages"].append("Réessayer l’assignation après activation du compte")
+                    user_payload["group_messages"].append("Utilisateur créé, affectation groupe en attente d’activation")
                 _append_pending({
+                    "batch_uuid": batch_uuid,
                     "email": email,
                     "user_id": user_id,
                     "group": group,
                     "group_id": group_id,
                     "group_assignment_deferred": True,
                     "reason": deferred_reason,
-                    "status": "deferred",
+                    "status": "pending_activation_before_group_attach",
                     "details": reason,
                 })
                 _log_group_assignment_trace(
@@ -1789,11 +1999,11 @@ def _process_rows(
                 )
 
         if user_payload["user_create_status"] == "success" and user_payload["groups_deferred"]:
-            user_payload["group_assignment_status"] = "deferred"
+            user_payload["group_assignment_status"] = "pending_activation_before_group_attach"
             user_payload["group_assignment_deferred"] = True
             user_payload["reason"] = "user_not_active_yet"
         elif user_payload["user_create_status"] == "success":
-            user_payload["group_assignment_status"] = "assigned"
+            user_payload["group_assignment_status"] = "group_attached"
             user_payload["group_assignment_deferred"] = False
         else:
             user_payload["group_assignment_status"] = "not-created"
@@ -1808,6 +2018,7 @@ def _process_rows(
             import_status=user_import_status,
             activation_link=user_payload.get("created_user_activation_link"),
             created_by_tool=1 if user_result["returncode"] == 0 else 0,
+            passbolt_user_id=str((row_user_obj or {}).get("id") or ""),
             actual_role=row.get("role", ""),
             last_known_activation_state="pending" if user_result["returncode"] == 0 else "unknown",
             deletable_candidate=1 if user_result["returncode"] == 0 and row.get("role", "").lower() != "admin" else 0,
@@ -2003,8 +2214,7 @@ def import_csv_stream() -> Any:
 @app.route("/pending-group-assignments", methods=["GET"])
 @app.route("/api/pending-group-assignments", methods=["GET"])
 def pending_group_assignments() -> Any:
-    with PENDING_LOCK:
-        payload = list(PENDING_ASSIGNMENTS)
+    payload = list_pending_group_assignments()
     return jsonify({"total": len(payload), "items": payload})
 
 
@@ -2037,11 +2247,14 @@ def retry_pending_group_assignments() -> Any:
     with PENDING_LOCK:
         current = list(PENDING_ASSIGNMENTS)
         PENDING_ASSIGNMENTS.clear()
+    if not current:
+        current = list_pending_group_assignments()
 
     for item in current:
+        group_name = str(item.get("group") or item.get("group_name") or "")
         try:
             user = group_service.find_user_by_email(item["email"])
-            group = group_service.get_group_by_name(item["group"])
+            group = group_service.get_group_by_name(group_name)
         except Exception as error:
             item["reason"] = str(error)
             still_pending.append(item)
@@ -2057,14 +2270,62 @@ def retry_pending_group_assignments() -> Any:
         if not _is_user_operational(user):
             item["reason"] = "user_not_active_yet"
             item["group_assignment_deferred"] = True
+            item["status"] = "pending_activation_before_group_attach"
+            upsert_pending_group_assignment(
+                batch_uuid=str(item.get("batch_uuid") or ""),
+                email=str(item.get("email") or ""),
+                user_id=user_id or None,
+                group_name=group_name,
+                group_id=group_id or None,
+                status="pending_activation_before_group_attach",
+                deferred_reason="user_not_active_yet",
+            )
             still_pending.append(item)
             continue
 
         result = group_service.assign_user_to_group(user_id, group_id)
         if result["returncode"] == 0:
-            retried.append({"email": item["email"], "group": item["group"], "status": "assigned"})
+            transfer_state = _promote_and_cleanup_temporary_manager(
+                group_service=group_service,
+                emit=None,
+                batch_uuid=str(item.get("batch_uuid") or ""),
+                row=0,
+                group_name=str(item.get("group") or item.get("group_name") or ""),
+                group_id=group_id,
+                service_account_user_id=group_service.get_technical_admin_user_id(),
+                active_user_id=user_id,
+                user_email=str(item.get("email") or ""),
+            )
+            upsert_pending_group_assignment(
+                batch_uuid=str(item.get("batch_uuid") or ""),
+                email=str(item.get("email") or ""),
+                user_id=user_id or None,
+                group_name=group_name,
+                group_id=group_id or None,
+                status="group_attached",
+                deferred_reason="",
+            )
+            retried.append(
+                {
+                    "email": item["email"],
+                    "group": group_name,
+                    "status": "group_attached",
+                    "user_promoted_to_group_manager": transfer_state["user_promoted_to_group_manager"],
+                    "service_account_removed_from_group": transfer_state["service_account_removed_from_group"],
+                }
+            )
         else:
             item["reason"] = result.get("stderr") or item.get("reason", "retry failed")
+            item["status"] = "pending_activation_before_group_attach"
+            upsert_pending_group_assignment(
+                batch_uuid=str(item.get("batch_uuid") or ""),
+                email=str(item.get("email") or ""),
+                user_id=user_id or None,
+                group_name=group_name,
+                group_id=group_id or None,
+                status="pending_activation_before_group_attach",
+                deferred_reason=str(item["reason"]),
+            )
             still_pending.append(item)
 
     with PENDING_LOCK:

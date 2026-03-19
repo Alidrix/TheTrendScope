@@ -1563,6 +1563,49 @@ class PassboltGroupService:
         status, _, message = self._request("PUT", f"/groups/{group_id}.json", update_payload)
         return {"returncode": 0 if status < 300 else 1, "stdout": "assigned" if status < 300 else "", "stderr": "" if status < 300 else message}
 
+    def get_group(self, group_id: str) -> dict[str, Any] | None:
+        status, payload, message = self._request("GET", f"/groups/{group_id}.json")
+        if status >= 400:
+            raise RuntimeError(message or f"group lookup failed HTTP {status}")
+        return payload.get("body") if isinstance(payload, dict) and isinstance(payload.get("body"), dict) else payload
+
+    def promote_user_to_group_manager(self, group_id: str, user_id: str) -> dict[str, Any]:
+        status, payload, message = self._request("GET", f"/groups/{group_id}.json")
+        if status >= 400:
+            return {"returncode": 1, "stderr": message, "stdout": ""}
+        body = payload.get("body") if isinstance(payload, dict) and isinstance(payload.get("body"), dict) else payload
+        members = body.get("groups_users") if isinstance(body, dict) and isinstance(body.get("groups_users"), list) else []
+        found = False
+        for member in members:
+            if isinstance(member, dict) and str(member.get("user_id")) == str(user_id):
+                member["is_admin"] = True
+                member["delete"] = False
+                found = True
+                break
+        if not found:
+            return {"returncode": 1, "stderr": "user not in group", "stdout": ""}
+        update_payload = {"name": body.get("name"), "groups_users": members}
+        put_status, _, put_message = self._request("PUT", f"/groups/{group_id}.json", update_payload)
+        return {"returncode": 0 if put_status < 300 else 1, "stdout": "promoted" if put_status < 300 else "", "stderr": "" if put_status < 300 else put_message}
+
+    def remove_user_from_group(self, group_id: str, user_id: str) -> dict[str, Any]:
+        status, payload, message = self._request("GET", f"/groups/{group_id}.json")
+        if status >= 400:
+            return {"returncode": 1, "stderr": message, "stdout": ""}
+        body = payload.get("body") if isinstance(payload, dict) and isinstance(payload.get("body"), dict) else payload
+        members = body.get("groups_users") if isinstance(body, dict) and isinstance(body.get("groups_users"), list) else []
+        manager_count = sum(1 for m in members if isinstance(m, dict) and not m.get("delete") and bool(m.get("is_admin")))
+        for member in members:
+            if not isinstance(member, dict) or str(member.get("user_id")) != str(user_id) or member.get("delete"):
+                continue
+            if member.get("is_admin") and manager_count <= 1:
+                return {"returncode": 1, "stdout": "", "stderr": "at least one manager is required"}
+            member["delete"] = True
+            break
+        update_payload = {"name": body.get("name"), "groups_users": members}
+        put_status, _, put_message = self._request("PUT", f"/groups/{group_id}.json", update_payload)
+        return {"returncode": 0 if put_status < 300 else 1, "stdout": "removed" if put_status < 300 else "", "stderr": "" if put_status < 300 else put_message}
+
 
 class PassboltDeleteService:
     def __init__(self, auth_service: PassboltApiAuthService) -> None:
@@ -1669,3 +1712,7 @@ class PassboltDeleteService:
     def delete_group_dry_run(self, group_id: str) -> tuple[bool, str, dict[str, Any]]:
         status, payload, message = self._request("DELETE", f"/groups/{group_id}/dry-run.json")
         return status < 300, parse_dry_run_message(payload, message), payload
+
+    def delete_group(self, group_id: str) -> tuple[bool, str, dict[str, Any], int]:
+        status, payload, message, _ = self._delete_request(f"/groups/{group_id}.json")
+        return status < 300, message, payload, status

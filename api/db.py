@@ -109,6 +109,47 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_import_logs_batch_uuid ON import_logs(batch_uuid)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_import_logs_scope ON import_logs(scope)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_import_logs_level ON import_logs(level)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS batch_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_uuid TEXT NOT NULL,
+                group_name TEXT NOT NULL,
+                group_id TEXT,
+                group_created_by_batch INTEGER NOT NULL DEFAULT 0,
+                service_account_added_as_temporary_manager INTEGER NOT NULL DEFAULT 0,
+                service_account_removed_from_group INTEGER NOT NULL DEFAULT 0,
+                user_promoted_to_group_manager INTEGER NOT NULL DEFAULT 0,
+                promoted_user_id TEXT,
+                final_group_state TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(batch_uuid, group_name),
+                FOREIGN KEY (batch_uuid) REFERENCES import_batches(batch_uuid) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_batch_groups_batch_uuid ON batch_groups(batch_uuid)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_batch_groups_group_id ON batch_groups(group_id)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_group_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_uuid TEXT NOT NULL,
+                email TEXT NOT NULL,
+                user_id TEXT,
+                group_name TEXT NOT NULL,
+                group_id TEXT,
+                status TEXT NOT NULL,
+                deferred_reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(batch_uuid, email, group_name),
+                FOREIGN KEY (batch_uuid) REFERENCES import_batches(batch_uuid) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_assignments_batch_uuid ON pending_group_assignments(batch_uuid)")
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -274,6 +315,101 @@ def update_user_delete_state(batch_uuid: str, email: str, activation_state: str,
             """,
             (activation_state, deletable_candidate, batch_uuid, email),
         )
+
+
+def upsert_batch_group(
+    batch_uuid: str,
+    group_name: str,
+    group_id: str | None = None,
+    group_created_by_batch: int = 0,
+    service_account_added_as_temporary_manager: int = 0,
+    service_account_removed_from_group: int = 0,
+    user_promoted_to_group_manager: int = 0,
+    promoted_user_id: str | None = None,
+    final_group_state: str | None = None,
+) -> None:
+    now = _utc_now_iso()
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO batch_groups (
+                batch_uuid, group_name, group_id, group_created_by_batch,
+                service_account_added_as_temporary_manager, service_account_removed_from_group,
+                user_promoted_to_group_manager, promoted_user_id, final_group_state, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(batch_uuid, group_name) DO UPDATE SET
+                group_id = COALESCE(excluded.group_id, batch_groups.group_id),
+                group_created_by_batch = MAX(batch_groups.group_created_by_batch, excluded.group_created_by_batch),
+                service_account_added_as_temporary_manager = MAX(batch_groups.service_account_added_as_temporary_manager, excluded.service_account_added_as_temporary_manager),
+                service_account_removed_from_group = MAX(batch_groups.service_account_removed_from_group, excluded.service_account_removed_from_group),
+                user_promoted_to_group_manager = MAX(batch_groups.user_promoted_to_group_manager, excluded.user_promoted_to_group_manager),
+                promoted_user_id = COALESCE(excluded.promoted_user_id, batch_groups.promoted_user_id),
+                final_group_state = COALESCE(excluded.final_group_state, batch_groups.final_group_state),
+                updated_at = excluded.updated_at
+            """,
+            (
+                batch_uuid,
+                group_name,
+                group_id,
+                group_created_by_batch,
+                service_account_added_as_temporary_manager,
+                service_account_removed_from_group,
+                user_promoted_to_group_manager,
+                promoted_user_id,
+                final_group_state,
+                now,
+                now,
+            ),
+        )
+
+
+def list_batch_groups(batch_uuid: str) -> list[dict[str, Any]]:
+    with _get_connection() as conn:
+        rows = conn.execute("SELECT * FROM batch_groups WHERE batch_uuid = ? ORDER BY id ASC", (batch_uuid,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def upsert_pending_group_assignment(
+    batch_uuid: str,
+    email: str,
+    group_name: str,
+    status: str,
+    user_id: str | None = None,
+    group_id: str | None = None,
+    deferred_reason: str | None = None,
+) -> None:
+    now = _utc_now_iso()
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO pending_group_assignments (
+                batch_uuid, email, user_id, group_name, group_id, status, deferred_reason, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(batch_uuid, email, group_name) DO UPDATE SET
+                user_id = COALESCE(excluded.user_id, pending_group_assignments.user_id),
+                group_id = COALESCE(excluded.group_id, pending_group_assignments.group_id),
+                status = excluded.status,
+                deferred_reason = excluded.deferred_reason,
+                updated_at = excluded.updated_at
+            """,
+            (batch_uuid, email, user_id, group_name, group_id, status, deferred_reason, now, now),
+        )
+
+
+def list_pending_group_assignments(batch_uuid: str | None = None) -> list[dict[str, Any]]:
+    with _get_connection() as conn:
+        if batch_uuid:
+            rows = conn.execute(
+                "SELECT * FROM pending_group_assignments WHERE batch_uuid = ? AND status LIKE 'pending%' ORDER BY id ASC",
+                (batch_uuid,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM pending_group_assignments WHERE status LIKE 'pending%' ORDER BY id ASC"
+            ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def is_latest_batch(batch_uuid: str) -> bool:
