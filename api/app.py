@@ -462,6 +462,67 @@ def _append_pending(entry: dict[str, Any]) -> None:
         PENDING_ASSIGNMENTS.append(entry)
 
 
+def _is_user_operational(user_obj: dict[str, Any] | None) -> bool:
+    if not isinstance(user_obj, dict):
+        return False
+    active = user_obj.get("active")
+    if isinstance(active, bool):
+        return active
+    if isinstance(active, (int, float)):
+        return bool(active)
+    disabled = user_obj.get("disabled")
+    if isinstance(disabled, bool) and disabled:
+        return False
+    status = str(
+        user_obj.get("status")
+        or user_obj.get("state")
+        or user_obj.get("activation_status")
+        or ""
+    ).strip().lower()
+    if status in {"active", "activated", "enabled", "ready", "complete", "completed"}:
+        return True
+    if status in {"inactive", "pending", "invited", "disabled", "blocked"}:
+        return False
+    return False
+
+
+def _log_group_assignment_trace(
+    emit: Any,
+    *,
+    row: int,
+    user_email: str,
+    user_id: str,
+    user_active: bool,
+    group_name: str,
+    group_exists_before: bool,
+    group_created: bool,
+    group_assignment_attempted: bool,
+    group_assignment_deferred: bool,
+    deferred_reason: str,
+    raw_response_group_create: Any,
+    raw_response_group_assign: Any,
+) -> None:
+    _emit_structured(
+        emit,
+        "info",
+        "group.assignment.trace",
+        "Group assignment trace",
+        row=row,
+        email=user_email,
+        user_email=user_email,
+        user_id=user_id,
+        user_active=user_active,
+        group_name=group_name,
+        group_exists_before=group_exists_before,
+        group_created=group_created,
+        group_assignment_attempted=group_assignment_attempted,
+        group_assignment_deferred=group_assignment_deferred,
+        deferred_reason=deferred_reason,
+        raw_response_group_create=raw_response_group_create,
+        raw_response_group_assign=raw_response_group_assign,
+    )
+
+
 
 
 def _emit_structured(emit: Any, level: str, code: str, message: str, **extra: Any) -> None:
@@ -1353,6 +1414,7 @@ def _process_rows(
             normalized = group.lower()
             group_item = known_groups.get(normalized)
             group_exists_before = bool(group_item)
+            create_result: dict[str, Any] | None = None
             if not group_item:
                 if emit:
                     emit({"type": "progress", "payload": {"current": index, "total": len(rows), "percent": int((index / max(len(rows), 1)) * 100), "stage": "create-group"}})
@@ -1360,6 +1422,21 @@ def _process_rows(
                     ui_message = "Échec création groupe : aucun gestionnaire fourni"
                     user_payload["errors"].append(ui_message)
                     user_payload["group_messages"].append(ui_message)
+                    _log_group_assignment_trace(
+                        emit,
+                        row=index,
+                        user_email=email,
+                        user_id=str((row_user_obj or {}).get("id") or ""),
+                        user_active=_is_user_operational(row_user_obj),
+                        group_name=group,
+                        group_exists_before=group_exists_before,
+                        group_created=False,
+                        group_assignment_attempted=False,
+                        group_assignment_deferred=True,
+                        deferred_reason="group_create_failed_no_technical_admin",
+                        raw_response_group_create="technical admin user_id unavailable",
+                        raw_response_group_assign="not_attempted:group_create_failed",
+                    )
                     _emit_structured(
                         emit,
                         "error",
@@ -1378,12 +1455,7 @@ def _process_rows(
                         user_added_to_group=False,
                     )
                     continue
-                additional_members: list[dict[str, Any]] = []
-                if user_result["returncode"] == 0:
-                    row_user_id = str((row_user_obj or {}).get("id") or "")
-                    if row_user_id:
-                        additional_members.append({"user_id": row_user_id, "is_admin": False})
-                create_result = group_service.create_group(group, technical_admin_user_id, additional_members=additional_members)
+                create_result = group_service.create_group(group, technical_admin_user_id, additional_members=None)
                 if create_result["returncode"] == 0:
                     groups_created_total += 1
                     user_payload["groups_created"].append(group)
@@ -1404,7 +1476,7 @@ def _process_rows(
                         manager_present=create_result.get("manager_present"),
                         group_create_http_status=create_result.get("http_status"),
                         group_create_raw_response=create_result.get("raw_response"),
-                        user_added_to_group=bool(additional_members),
+                        user_added_to_group=False,
                     )
                 elif "already" not in (create_result.get("stderr", "").lower()):
                     stderr = create_result.get("stderr", "")
@@ -1416,6 +1488,21 @@ def _process_rows(
                     )
                     user_payload["errors"].append(ui_message)
                     user_payload["group_messages"].append(ui_message)
+                    _log_group_assignment_trace(
+                        emit,
+                        row=index,
+                        user_email=email,
+                        user_id=str((row_user_obj or {}).get("id") or ""),
+                        user_active=_is_user_operational(row_user_obj),
+                        group_name=group,
+                        group_exists_before=group_exists_before,
+                        group_created=False,
+                        group_assignment_attempted=False,
+                        group_assignment_deferred=True,
+                        deferred_reason="group_create_failed",
+                        raw_response_group_create=create_result.get("raw_response"),
+                        raw_response_group_assign="not_attempted:group_create_failed",
+                    )
                     _emit_structured(
                         emit,
                         "error",
@@ -1439,43 +1526,79 @@ def _process_rows(
                     lookup_group = group_service.get_group_by_name(group)
                 except Exception as error:
                     user_payload["errors"].append(f"group {group}: {error}")
+                    _log_group_assignment_trace(
+                        emit,
+                        row=index,
+                        user_email=email,
+                        user_id=str((row_user_obj or {}).get("id") or ""),
+                        user_active=_is_user_operational(row_user_obj),
+                        group_name=group,
+                        group_exists_before=group_exists_before,
+                        group_created=bool(create_result and create_result.get("returncode") == 0),
+                        group_assignment_attempted=False,
+                        group_assignment_deferred=True,
+                        deferred_reason="group_lookup_failed_after_create",
+                        raw_response_group_create=(create_result or {}).get("raw_response"),
+                        raw_response_group_assign=str(error),
+                    )
                     _emit_structured(emit, "error", "group.lookup.failed", "Group lookup failed", row=index, group=group, email=email, stderr=str(error))
                     continue
                 if not lookup_group:
                     user_payload["errors"].append(f"group {group}: lookup failed after creation")
+                    _log_group_assignment_trace(
+                        emit,
+                        row=index,
+                        user_email=email,
+                        user_id=str((row_user_obj or {}).get("id") or ""),
+                        user_active=_is_user_operational(row_user_obj),
+                        group_name=group,
+                        group_exists_before=group_exists_before,
+                        group_created=bool(create_result and create_result.get("returncode") == 0),
+                        group_assignment_attempted=False,
+                        group_assignment_deferred=True,
+                        deferred_reason="group_lookup_failed_after_create",
+                        raw_response_group_create=(create_result or {}).get("raw_response"),
+                        raw_response_group_assign="lookup failed after creation",
+                    )
                     _emit_structured(emit, "error", "group.lookup.failed", "Group lookup failed", row=index, group=group, email=email)
                     continue
                 group_item = lookup_group
                 known_groups[normalized] = group_item
-                if additional_members:
-                    user_payload["groups_assigned"].append(group)
-                    groups_assigned_total += 1
-                    _emit_structured(
-                        emit,
-                        "info",
-                        "group.assign.success",
-                        "User attached at group creation",
-                        row=index,
-                        group=group,
-                        group_name=group,
-                        email=email,
-                        group_exists_before=group_exists_before,
-                        technical_admin_user_id=create_result.get("technical_admin_user_id"),
-                        groups_users=create_result.get("groups_users"),
-                        manager_present=create_result.get("manager_present"),
-                        group_create_http_status=create_result.get("http_status"),
-                        group_create_raw_response=create_result.get("raw_response"),
-                        user_added_to_group=True,
-                    )
-                    continue
 
             if emit:
                 emit({"type": "progress", "payload": {"current": index, "total": len(rows), "percent": int((index / max(len(rows), 1)) * 100), "stage": "assign-group"}})
 
+            row_user_id = str((row_user_obj or {}).get("id") or "")
+            user_active = _is_user_operational(row_user_obj)
+            group_created = group in user_payload["groups_created"]
+            create_raw_response = (create_result or {}).get("raw_response") if create_result else "group already existed"
+
             if user_result["returncode"] != 0:
                 user_payload["groups_deferred"].append(group)
                 groups_deferred_total += 1
-                _append_pending({"email": email, "group": group, "reason": "user creation failed", "status": "deferred"})
+                _append_pending({
+                    "email": email,
+                    "user_id": row_user_id,
+                    "group": group,
+                    "group_assignment_deferred": True,
+                    "reason": "user_creation_failed",
+                    "status": "deferred",
+                })
+                _log_group_assignment_trace(
+                    emit,
+                    row=index,
+                    user_email=email,
+                    user_id=row_user_id,
+                    user_active=False,
+                    group_name=group,
+                    group_exists_before=group_exists_before,
+                    group_created=group_created,
+                    group_assignment_attempted=False,
+                    group_assignment_deferred=True,
+                    deferred_reason="user_creation_failed",
+                    raw_response_group_create=create_raw_response,
+                    raw_response_group_assign="not_attempted:user_creation_failed",
+                )
                 _emit_structured(emit, "warning", "group.defer", "Group assignment deferred", row=index, group=group, email=email, reason="user creation failed")
                 continue
 
@@ -1483,25 +1606,118 @@ def _process_rows(
                 reason = row_user_lookup_error
                 user_payload["groups_deferred"].append(group)
                 groups_deferred_total += 1
-                _append_pending({"email": email, "group": group, "reason": reason, "status": "deferred"})
+                _append_pending({
+                    "email": email,
+                    "user_id": row_user_id,
+                    "group": group,
+                    "group_assignment_deferred": True,
+                    "reason": "user_lookup_failed",
+                    "status": "deferred",
+                    "details": reason,
+                })
+                _log_group_assignment_trace(
+                    emit,
+                    row=index,
+                    user_email=email,
+                    user_id=row_user_id,
+                    user_active=False,
+                    group_name=group,
+                    group_exists_before=group_exists_before,
+                    group_created=group_created,
+                    group_assignment_attempted=False,
+                    group_assignment_deferred=True,
+                    deferred_reason="user_lookup_failed",
+                    raw_response_group_create=create_raw_response,
+                    raw_response_group_assign=reason,
+                )
                 _emit_structured(emit, "warning", "group.assign.deferred", "Group assignment deferred", row=index, group=group, email=email, reason=reason)
                 continue
 
-            user_id = str((row_user_obj or {}).get("id") or "")
+            user_id = row_user_id
             group_id = str((group_item or {}).get("id") or "")
             if not user_id or not group_id:
                 reason = "missing user_id/group_id"
                 user_payload["groups_deferred"].append(group)
                 groups_deferred_total += 1
-                _append_pending({"email": email, "group": group, "reason": reason, "status": "deferred"})
+                _append_pending({
+                    "email": email,
+                    "user_id": user_id,
+                    "group": group,
+                    "group_assignment_deferred": True,
+                    "reason": "missing_user_or_group_id",
+                    "status": "deferred",
+                })
+                _log_group_assignment_trace(
+                    emit,
+                    row=index,
+                    user_email=email,
+                    user_id=user_id,
+                    user_active=user_active,
+                    group_name=group,
+                    group_exists_before=group_exists_before,
+                    group_created=group_created,
+                    group_assignment_attempted=False,
+                    group_assignment_deferred=True,
+                    deferred_reason="missing_user_or_group_id",
+                    raw_response_group_create=create_raw_response,
+                    raw_response_group_assign="not_attempted:missing_user_or_group_id",
+                )
                 _emit_structured(emit, "warning", "group.assign.deferred", "Group assignment deferred", row=index, group=group, email=email, reason=reason)
+                continue
+
+            if not user_active:
+                deferred_reason = "user_not_active_yet"
+                user_payload["groups_deferred"].append(group)
+                user_payload["group_messages"].append("Utilisateur créé mais non encore activé : ajout au groupe différé")
+                user_payload["group_messages"].append("Réessayer l’assignation après activation du compte")
+                groups_deferred_total += 1
+                _append_pending({
+                    "email": email,
+                    "user_id": user_id,
+                    "group": group,
+                    "group_id": group_id,
+                    "group_assignment_deferred": True,
+                    "reason": deferred_reason,
+                    "status": "deferred",
+                })
+                _log_group_assignment_trace(
+                    emit,
+                    row=index,
+                    user_email=email,
+                    user_id=user_id,
+                    user_active=False,
+                    group_name=group,
+                    group_exists_before=group_exists_before,
+                    group_created=group_created,
+                    group_assignment_attempted=False,
+                    group_assignment_deferred=True,
+                    deferred_reason=deferred_reason,
+                    raw_response_group_create=create_raw_response,
+                    raw_response_group_assign="not_attempted:user_not_active_yet",
+                )
+                _emit_structured(emit, "warning", "group.assign.deferred", "Group assignment deferred", row=index, group=group, email=email, reason=deferred_reason)
                 continue
 
             assign_result = group_service.assign_user_to_group(user_id, group_id)
             if assign_result["returncode"] == 0:
                 user_payload["groups_assigned"].append(group)
                 groups_assigned_total += 1
-                user_payload["group_messages"].append("Utilisateur ajouté au groupe existant")
+                user_payload["group_messages"].append("Utilisateur ajouté au groupe")
+                _log_group_assignment_trace(
+                    emit,
+                    row=index,
+                    user_email=email,
+                    user_id=user_id,
+                    user_active=True,
+                    group_name=group,
+                    group_exists_before=group_exists_before,
+                    group_created=group_created,
+                    group_assignment_attempted=True,
+                    group_assignment_deferred=False,
+                    deferred_reason="",
+                    raw_response_group_create=create_raw_response,
+                    raw_response_group_assign=assign_result,
+                )
                 _emit_structured(emit, "info", "group.assign.success", "Group assigned", row=index, group=group, email=email)
                 _emit_structured(
                     emit,
@@ -1542,15 +1758,46 @@ def _process_rows(
                 )
                 user_payload["groups_deferred"].append(group)
                 groups_deferred_total += 1
-                _append_pending({"email": email, "group": group, "reason": reason, "status": "deferred"})
+                deferred_reason = "user_not_active_yet" if "user_id" in reason.lower() or "active" in reason.lower() else "assign_failed"
+                if deferred_reason == "user_not_active_yet":
+                    user_payload["group_messages"].append("Utilisateur créé mais non encore activé : ajout au groupe différé")
+                    user_payload["group_messages"].append("Réessayer l’assignation après activation du compte")
+                _append_pending({
+                    "email": email,
+                    "user_id": user_id,
+                    "group": group,
+                    "group_id": group_id,
+                    "group_assignment_deferred": True,
+                    "reason": deferred_reason,
+                    "status": "deferred",
+                    "details": reason,
+                })
+                _log_group_assignment_trace(
+                    emit,
+                    row=index,
+                    user_email=email,
+                    user_id=user_id,
+                    user_active=user_active,
+                    group_name=group,
+                    group_exists_before=group_exists_before,
+                    group_created=group_created,
+                    group_assignment_attempted=True,
+                    group_assignment_deferred=True,
+                    deferred_reason=deferred_reason,
+                    raw_response_group_create=create_raw_response,
+                    raw_response_group_assign=assign_result,
+                )
 
         if user_payload["user_create_status"] == "success" and user_payload["groups_deferred"]:
             user_payload["group_assignment_status"] = "deferred"
-            user_payload["reason"] = "user not active yet"
+            user_payload["group_assignment_deferred"] = True
+            user_payload["reason"] = "user_not_active_yet"
         elif user_payload["user_create_status"] == "success":
             user_payload["group_assignment_status"] = "assigned"
+            user_payload["group_assignment_deferred"] = False
         else:
             user_payload["group_assignment_status"] = "not-created"
+            user_payload["group_assignment_deferred"] = False
 
         save_imported_user(
             batch_uuid=batch_uuid,
@@ -1754,6 +2001,7 @@ def import_csv_stream() -> Any:
 
 
 @app.route("/pending-group-assignments", methods=["GET"])
+@app.route("/api/pending-group-assignments", methods=["GET"])
 def pending_group_assignments() -> Any:
     with PENDING_LOCK:
         payload = list(PENDING_ASSIGNMENTS)
@@ -1761,6 +2009,7 @@ def pending_group_assignments() -> Any:
 
 
 @app.route("/retry-pending-group-assignments", methods=["POST"])
+@app.route("/api/retry-pending-group-assignments", methods=["POST"])
 def retry_pending_group_assignments() -> Any:
     if PassboltApiAuthServiceV2 is None or PassboltGroupServiceV2 is None:
         return _passbolt_api_unavailable_response("retry-pending-group-assignments")
@@ -1798,10 +2047,16 @@ def retry_pending_group_assignments() -> Any:
             still_pending.append(item)
             continue
 
-        user_id = str((user or {}).get("id") or "")
+        user_id = str((user or {}).get("id") or item.get("user_id") or "")
         group_id = str((group or {}).get("id") or "")
         if not user_id or not group_id:
             item["reason"] = "missing user_id/group_id"
+            still_pending.append(item)
+            continue
+
+        if not _is_user_operational(user):
+            item["reason"] = "user_not_active_yet"
+            item["group_assignment_deferred"] = True
             still_pending.append(item)
             continue
 

@@ -3,6 +3,7 @@ import { $, escapeHtml, setToast, textCell } from '../utils.js';
 import { kpiCard } from '../components/kpi-card.js';
 import { appendConsoleLine } from '../components/console-panel.js';
 import { statusBadge } from '../components/status-chip.js';
+import { apiGet, apiPost } from '../api.js';
 
 export function renderImporterView() {
   $('importerView').innerHTML = `
@@ -13,6 +14,10 @@ export function renderImporterView() {
           <input id="importFile" type="file" accept=".csv"/>
         </div>
         <div class="action-bar mt-3"><button class="btn btn-primary" id="importStartBtn">Démarrer l'import</button></div>
+        <div class="action-bar mt-2">
+          <button class="btn btn-secondary" id="retryAssignmentsBtn">Relancer les assignations en attente</button>
+          <span class="muted" id="pendingAssignmentsInfo">Chargement…</span>
+        </div>
       </section>
 
       <section class="card">
@@ -29,6 +34,8 @@ export function renderImporterView() {
     </section>
   `;
   $('importStartBtn').addEventListener('click', runImportFlow);
+  $('retryAssignmentsBtn').addEventListener('click', retryPendingAssignments);
+  refreshPendingAssignmentsInfo();
 }
 
 function setImportProgress(percent, stage) {
@@ -97,8 +104,33 @@ async function runImportFlow() {
       }
     }
     setToast('Import terminé.', 'success');
+    refreshPendingAssignmentsInfo();
   } catch (e) { setToast(`Erreur import: ${e.message}`, 'error'); }
   finally { $('importStartBtn').disabled = false; }
+}
+
+async function refreshPendingAssignmentsInfo() {
+  try {
+    const payload = await apiGet('/api/pending-group-assignments');
+    $('pendingAssignmentsInfo').textContent = `${payload.total || 0} assignation(s) en attente`;
+  } catch {
+    $('pendingAssignmentsInfo').textContent = 'Statut des assignations en attente indisponible';
+  }
+}
+
+async function retryPendingAssignments() {
+  $('retryAssignmentsBtn').disabled = true;
+  try {
+    const payload = await apiPost('/api/retry-pending-group-assignments');
+    const retried = payload.retried?.length || 0;
+    const pending = payload.pending_total || 0;
+    setToast(`Assignations relancées: ${retried}, en attente: ${pending}`, 'success');
+    refreshPendingAssignmentsInfo();
+  } catch (e) {
+    setToast(`Relance impossible: ${e.message}`, 'error');
+  } finally {
+    $('retryAssignmentsBtn').disabled = false;
+  }
 }
 
 function renderImportFinal(payload) {
@@ -117,7 +149,8 @@ function renderImportFinal(payload) {
       row.group_messages?.length ? row.group_messages.join(' | ') : '',
       row.errors?.length ? `Erreurs: ${row.errors.join(' | ')}` : '',
       row.groups_created?.length ? `Groupes créés: ${row.groups_created.join(', ')}` : '',
-      row.groups_assigned?.length ? `Groupes assignés: ${row.groups_assigned.join(', ')}` : ''
+      row.groups_assigned?.length ? `Groupes assignés: ${row.groups_assigned.join(', ')}` : '',
+      row.groups_deferred?.length ? `Groupes en attente: ${row.groups_deferred.join(', ')}` : ''
     ].filter(Boolean).join(' • ') || '-';
     return `<tr><td>${textCell(row.email)}</td><td>${statusBadge(row.user_create_status)}</td><td>${textCell((row.groups_requested || []).join(', '))}</td><td>${textCell(escapeHtml(detail))}</td></tr>`;
   }).join('');
