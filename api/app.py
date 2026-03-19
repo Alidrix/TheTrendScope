@@ -1375,6 +1375,7 @@ def _process_rows(
                         manager_present=False,
                         group_create_http_status=None,
                         group_create_raw_response="technical admin user_id unavailable",
+                        user_added_to_group=False,
                     )
                     continue
                 additional_members: list[dict[str, Any]] = []
@@ -1403,11 +1404,16 @@ def _process_rows(
                         manager_present=create_result.get("manager_present"),
                         group_create_http_status=create_result.get("http_status"),
                         group_create_raw_response=create_result.get("raw_response"),
+                        user_added_to_group=bool(additional_members),
                     )
                 elif "already" not in (create_result.get("stderr", "").lower()):
                     stderr = create_result.get("stderr", "")
                     no_manager_error = "at_least_one_group_manager" in stderr.lower() or "gestionnaire" in stderr.lower()
-                    ui_message = "Échec création groupe : aucun gestionnaire fourni" if no_manager_error else f"group {group}: {stderr or 'creation failed'}"
+                    ui_message = (
+                        "Échec création groupe : aucun gestionnaire fourni"
+                        if no_manager_error
+                        else f"Échec création groupe : {stderr or 'erreur inconnue'}"
+                    )
                     user_payload["errors"].append(ui_message)
                     user_payload["group_messages"].append(ui_message)
                     _emit_structured(
@@ -1426,6 +1432,7 @@ def _process_rows(
                         manager_present=create_result.get("manager_present"),
                         group_create_http_status=create_result.get("http_status"),
                         group_create_raw_response=create_result.get("raw_response"),
+                        user_added_to_group=False,
                     )
                     continue
                 try:
@@ -1458,6 +1465,7 @@ def _process_rows(
                         manager_present=create_result.get("manager_present"),
                         group_create_http_status=create_result.get("http_status"),
                         group_create_raw_response=create_result.get("raw_response"),
+                        user_added_to_group=True,
                     )
                     continue
 
@@ -1495,9 +1503,43 @@ def _process_rows(
                 groups_assigned_total += 1
                 user_payload["group_messages"].append("Utilisateur ajouté au groupe existant")
                 _emit_structured(emit, "info", "group.assign.success", "Group assigned", row=index, group=group, email=email)
+                _emit_structured(
+                    emit,
+                    "info",
+                    "group.assign.audit",
+                    "User added to existing group",
+                    row=index,
+                    group=group,
+                    group_name=group,
+                    email=email,
+                    group_exists_before=group_exists_before,
+                    technical_admin_user_id=technical_admin_user_id,
+                    groups_users=[],
+                    manager_present=True,
+                    group_create_http_status=None,
+                    group_create_raw_response="group already existed",
+                    user_added_to_group=True,
+                )
             else:
                 reason = assign_result.get("stderr") or "user not active yet"
                 _emit_structured(emit, "warning", "group.assign.deferred", "Group assignment deferred", row=index, group=group, email=email, reason=reason)
+                _emit_structured(
+                    emit,
+                    "warning",
+                    "group.assign.audit",
+                    "User not added to existing group",
+                    row=index,
+                    group=group,
+                    group_name=group,
+                    email=email,
+                    group_exists_before=group_exists_before,
+                    technical_admin_user_id=technical_admin_user_id,
+                    groups_users=[],
+                    manager_present=True,
+                    group_create_http_status=None,
+                    group_create_raw_response=reason,
+                    user_added_to_group=False,
+                )
                 user_payload["groups_deferred"].append(group)
                 groups_deferred_total += 1
                 _append_pending({"email": email, "group": group, "reason": reason, "status": "deferred"})
