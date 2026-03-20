@@ -33,25 +33,25 @@ export async function refreshHistory() {
   try {
     const batches = await apiGet('/api/batches').catch(() => ({ items: [] }));
     state.batches = batches.items || [];
-    if (!state.activeBatch && state.batches.length) state.activeBatch = state.batches[0].batch_uuid;
+    if (!state.activeBatch && state.batches.length) state.activeBatch = state.batches[0].import_job_id || state.batches[0].batch_uuid;
     renderHistoryList();
   } catch (e) { setToast(`Historique indisponible: ${e.message}`, 'error'); }
 }
 
 function renderHistoryList() {
   const rows = [...state.batches]
-    .filter((b) => `${b.batch_uuid || ''} ${b.filename || ''}`.toLowerCase().includes(state.historySearch))
+    .filter((b) => `${b.import_job_id || b.batch_uuid || ''} ${b.filename || ''}`.toLowerCase().includes(state.historySearch))
     .sort((a, b) => {
       if (state.historySort === 'date_asc') return new Date(a.created_at) - new Date(b.created_at);
-      if (state.historySort === 'errors_desc') return (b.errors_count || 0) - (a.errors_count || 0);
+      if (state.historySort === 'errors_desc') return (b.error_count || 0) - (a.error_count || 0);
       return new Date(b.created_at) - new Date(a.created_at);
     });
 
   $('batchList').innerHTML = rows.map((b) => `
-    <button class="batch-item ${b.batch_uuid === state.activeBatch ? 'active' : ''}" data-batch="${escapeHtml(b.batch_uuid)}">
+    <button class="batch-item ${b.import_job_id === state.activeBatch ? 'active' : ''}" data-batch="${escapeHtml(b.import_job_id || b.batch_uuid)}">
       <p class="text-ellipsis"><strong>${escapeHtml(b.filename || 'Sans nom')}</strong></p>
       <p class="muted text-ellipsis">${formatDate(b.created_at)}</p>
-      <p class="muted text-break">${escapeHtml(b.batch_uuid || '-')}</p>
+      <p class="muted text-break">${escapeHtml(b.import_job_id || b.batch_uuid || '-')}</p>
     </button>
   `).join('') || emptyState('Aucun batch.');
 
@@ -60,16 +60,16 @@ function renderHistoryList() {
     renderHistoryList();
   }));
 
-  const selected = state.batches.find((b) => b.batch_uuid === state.activeBatch);
+  const selected = state.batches.find((b) => (b.import_job_id || b.batch_uuid) === state.activeBatch);
   $('historyDetail').innerHTML = selected
     ? `
       <div class="section-header"><h3>Lot actif</h3>${statusBadge(selected.status)}</div>
       <div class="grid-kpi">
         ${kpiCard('Succès', selected.success_count || 0)}
-        ${kpiCard('Erreurs', selected.errors_count || 0)}
-        ${kpiCard('Assignations groupes', selected.group_assignments || 0)}
+        ${kpiCard('Erreurs', selected.error_count || 0)}
+        ${kpiCard('Batchs terminés', `${selected.completed_batches || 0}/${selected.total_batches || 0}`)}
       </div>
-      <p class="muted mt-3 text-break">UUID: ${escapeHtml(selected.batch_uuid || '-')}</p>
+      <p class="muted mt-3 text-break">Import Job: ${escapeHtml(selected.import_job_id || selected.batch_uuid || '-')}</p>
       <p class="muted text-break">Fichier: ${escapeHtml(selected.filename || '-')}</p>
     `
     : emptyState('Sélectionnez un batch à gauche.');

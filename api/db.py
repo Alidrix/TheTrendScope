@@ -42,6 +42,9 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS import_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 batch_uuid TEXT UNIQUE NOT NULL,
+                import_job_id TEXT,
+                batch_index INTEGER NOT NULL DEFAULT 1,
+                total_batches INTEGER NOT NULL DEFAULT 1,
                 filename TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 total_rows INTEGER NOT NULL DEFAULT 0,
@@ -73,6 +76,7 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_users_batch_uuid ON imported_users(batch_uuid)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_import_batches_import_job_id ON import_batches(import_job_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_users_email ON imported_users(email)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_users_batch_email ON imported_users(batch_uuid, email)")
         conn.execute(
@@ -150,20 +154,47 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_assignments_batch_uuid ON pending_group_assignments(batch_uuid)")
+        _ensure_import_batches_columns(conn)
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
+def _ensure_import_batches_columns(conn: sqlite3.Connection) -> None:
+    columns = _table_columns(conn, "import_batches")
+    if "import_job_id" not in columns:
+        conn.execute("ALTER TABLE import_batches ADD COLUMN import_job_id TEXT")
+    if "batch_index" not in columns:
+        conn.execute("ALTER TABLE import_batches ADD COLUMN batch_index INTEGER NOT NULL DEFAULT 1")
+    if "total_batches" not in columns:
+        conn.execute("ALTER TABLE import_batches ADD COLUMN total_batches INTEGER NOT NULL DEFAULT 1")
+    conn.execute("UPDATE import_batches SET import_job_id = COALESCE(import_job_id, batch_uuid) WHERE import_job_id IS NULL OR import_job_id = ''")
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
-def create_import_batch(batch_uuid: str, filename: str, total_rows: int, status: str = "running") -> None:
+def create_import_batch(
+    batch_uuid: str,
+    filename: str,
+    total_rows: int,
+    status: str = "running",
+    import_job_id: str | None = None,
+    batch_index: int = 1,
+    total_batches: int = 1,
+) -> None:
     with _get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO import_batches (batch_uuid, filename, created_at, total_rows, success_count, error_count, status)
-            VALUES (?, ?, ?, ?, 0, 0, ?)
+            INSERT INTO import_batches (
+                batch_uuid, import_job_id, batch_index, total_batches, filename, created_at, total_rows, success_count, error_count, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
             """,
-            (batch_uuid, filename, _utc_now_iso(), total_rows, status),
+            (batch_uuid, import_job_id or batch_uuid, batch_index, total_batches, filename, _utc_now_iso(), total_rows, status),
         )
 
 
@@ -222,17 +253,54 @@ def finalize_import_batch(batch_uuid: str, success_count: int, error_count: int,
 
 
 def get_last_import_batch() -> dict[str, Any] | None:
-    with _get_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM import_batches ORDER BY datetime(created_at) DESC, id DESC LIMIT 1"
-        ).fetchone()
-    return _row_to_dict(row)
+    items = list_import_batches()
+    return items[0] if items else None
 
 
 def list_import_batches() -> list[dict[str, Any]]:
     with _get_connection() as conn:
         rows = conn.execute(
-            "SELECT * FROM import_batches ORDER BY datetime(created_at) DESC, id DESC"
+            """
+            SELECT
+                COALESCE(import_job_id, batch_uuid) AS import_job_id,
+                MAX(filename) AS filename,
+                MIN(created_at) AS created_at,
+                SUM(total_rows) AS total_rows,
+                SUM(success_count) AS success_count,
+                SUM(error_count) AS error_count,
+                MAX(total_batches) AS total_batches,
+                COUNT(*) AS completed_batches,
+                CASE
+                    WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) > 0 THEN 'failed'
+                    WHEN COUNT(*) = MAX(total_batches) AND SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) = COUNT(*) THEN 'completed'
+                    WHEN COUNT(*) = MAX(total_batches) THEN 'partial'
+                    ELSE 'running'
+                END AS status,
+                GROUP_CONCAT(batch_uuid, ',') AS batch_uuids
+            FROM import_batches
+            GROUP BY COALESCE(import_job_id, batch_uuid)
+            ORDER BY datetime(MIN(created_at)) DESC, MAX(id) DESC
+            """
+        ).fetchall()
+    payload: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["batch_uuid"] = item.get("import_job_id")
+        item["batch_ids"] = [value for value in str(item.get("batch_uuids") or "").split(",") if value]
+        payload.append(item)
+    return payload
+
+
+def list_batches_for_import_job(import_job_id: str) -> list[dict[str, Any]]:
+    with _get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM import_batches
+            WHERE COALESCE(import_job_id, batch_uuid) = ?
+            ORDER BY batch_index ASC, id ASC
+            """,
+            (import_job_id,),
         ).fetchall()
     return [dict(row) for row in rows]
 

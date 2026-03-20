@@ -38,6 +38,7 @@ from db import (
     save_log,
     save_imported_user,
     list_batch_groups,
+    list_batches_for_import_job,
     list_pending_group_assignments,
     upsert_batch_group,
     upsert_pending_group_assignment,
@@ -67,6 +68,7 @@ PASSBOLT_CONTAINER = os.getenv("PASSBOLT_CONTAINER", "passbolt-passbolt-1")
 PASSBOLT_CLI_PATH = os.getenv("PASSBOLT_CLI_PATH", "/usr/share/php/passbolt/bin/cake")
 IMPORT_COMMAND_TIMEOUT = int(os.getenv("IMPORT_COMMAND_TIMEOUT", "60"))
 IMPORT_TOTAL_TIMEOUT = int(os.getenv("IMPORT_TOTAL_TIMEOUT", "60"))
+IMPORT_BATCH_SIZE = int(os.getenv("IMPORT_BATCH_SIZE", "100"))
 ROLLBACK_COMMAND = os.getenv("PASSBOLT_ROLLBACK_COMMAND", "")
 PASSBOLT_URL = os.getenv("PASSBOLT_URL", "").rstrip("/")
 PASSBOLT_VERIFY_TLS = os.getenv("PASSBOLT_VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
@@ -1418,6 +1420,68 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
     return result_payload
 
 
+def process_delete_import_job(import_job_id: str, dry_run_only: bool = False, emit: Any = None, ui_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    batches = list_batches_for_import_job(import_job_id)
+    if not batches:
+        return {"error": "import_job_id not found", "import_job_id": import_job_id}
+
+    all_results: list[dict[str, Any]] = []
+    total_batches = len(batches)
+    completed = 0
+    for batch in batches:
+        payload = process_delete_batch(str(batch.get("batch_uuid") or ""), dry_run_only=dry_run_only, emit=emit, ui_context=ui_context)
+        all_results.extend(payload.get("results", []))
+        completed += 1
+        delete_progress = round((completed / max(total_batches, 1)) * 100, 2)
+        _save_live_log(
+            "delete",
+            "info",
+            "Import job delete progress",
+            batch_uuid=str(batch.get("batch_uuid") or ""),
+            event_code="delete.job.progress",
+            payload={
+                "import_job_id": import_job_id,
+                "batch_id": batch.get("batch_uuid"),
+                "current_batch": completed,
+                "total_batches": total_batches,
+                "delete_progress": delete_progress,
+            },
+        )
+        if emit:
+            emit(
+                {
+                    "type": "progress",
+                    "payload": {
+                        "stage": "delete-job",
+                        "batch_id": batch.get("batch_uuid"),
+                        "current_batch": completed,
+                        "total_batches": total_batches,
+                        "delete_progress": delete_progress,
+                    },
+                }
+            )
+            emit({"type": "log", "message": f"batch {completed}/{total_batches} supprimé"})
+
+    summary = {
+        "analyzed": len(all_results),
+        "eligible": sum(1 for item in all_results if item.get("eligible")),
+        "excluded": sum(1 for item in all_results if not item.get("eligible")),
+        "admins_protected": sum(1 for item in all_results if item.get("status") == "SKIPPED_ADMIN"),
+        "errors": sum(1 for item in all_results if item.get("status") in {"ERROR", "BLOCKED_BY_PASSBOLT"}),
+    }
+    return {
+        "import_job_id": import_job_id,
+        "batch_uuid": import_job_id,
+        "dry_run_only": dry_run_only,
+        "status": "completed",
+        "results": all_results,
+        "summary": summary,
+        "current_batch": total_batches,
+        "total_batches": total_batches,
+        "delete_progress": 100,
+    }
+
+
 
 def _process_rows(
     rows: list[dict[str, Any]],
@@ -1426,6 +1490,9 @@ def _process_rows(
     rollback_on_error: bool,
     source_filename: str,
     emit: Any = None,
+    import_job_id: str | None = None,
+    batch_index: int = 1,
+    total_batches: int = 1,
 ) -> dict[str, Any]:
     started = time.time()
     batch_uuid = str(uuid.uuid4())
@@ -1443,7 +1510,15 @@ def _process_rows(
         ca_bundle_exists=group_tls["ca_bundle_exists"],
     )
     preview = preview_rows(rows)
-    create_import_batch(batch_uuid=batch_uuid, filename=source_filename, total_rows=len(rows), status="running")
+    create_import_batch(
+        batch_uuid=batch_uuid,
+        filename=source_filename,
+        total_rows=len(rows),
+        status="running",
+        import_job_id=import_job_id or batch_uuid,
+        batch_index=batch_index,
+        total_batches=total_batches,
+    )
     _save_live_log("import", "info", "Import batch record created", batch_uuid=batch_uuid, event_code="import.batch.created", payload={"filename": source_filename, "total_rows": len(rows)})
 
     valid_rows = [row for row in preview["rows"] if row["valid"]]
@@ -2052,6 +2127,10 @@ def _process_rows(
     _save_live_log("import", "audit", "Import batch finalized", batch_uuid=batch_uuid, event_code="import.batch.finalized", payload={"status": batch_status, "users_created": len(created_users), "errors": errors_count})
 
     return {
+        "import_job_id": import_job_id or batch_uuid,
+        "current_batch": batch_index,
+        "total_batches": total_batches,
+        "global_progress": round((batch_index / max(total_batches, 1)) * 100, 2),
         "batch_uuid": batch_uuid,
         "status": final_status,
         "total": len(results),
@@ -2068,6 +2147,11 @@ def _process_rows(
         },
         "rollback": rollback,
     }
+
+
+def _chunk_rows(rows: list[dict[str, Any]], chunk_size: int) -> list[list[dict[str, Any]]]:
+    size = max(1, chunk_size)
+    return [rows[index:index + size] for index in range(0, len(rows), size)] or [[]]
 
 
 @app.route("/health", methods=["GET"])
@@ -2150,8 +2234,41 @@ def import_csv() -> Any:
     container = diagnostics.get("resolved_container", PASSBOLT_CONTAINER)
     cli_path = diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH)
 
-    payload = _process_rows(rows, container, cli_path, rollback_on_error=rollback_on_error, source_filename=source_filename)
-    payload["diagnostics"] = diagnostics
+    import_job_id = str(uuid.uuid4())
+    chunks = _chunk_rows(rows, IMPORT_BATCH_SIZE)
+    batch_payloads: list[dict[str, Any]] = []
+    for index, chunk in enumerate(chunks, start=1):
+        payload = _process_rows(
+            chunk,
+            container,
+            cli_path,
+            rollback_on_error=rollback_on_error,
+            source_filename=source_filename,
+            import_job_id=import_job_id,
+            batch_index=index,
+            total_batches=len(chunks),
+        )
+        batch_payloads.append(payload)
+    summary = {
+        "users_created": sum(int(item.get("summary", {}).get("users_created", 0)) for item in batch_payloads),
+        "groups_created": sum(int(item.get("summary", {}).get("groups_created", 0)) for item in batch_payloads),
+        "groups_assigned": sum(int(item.get("summary", {}).get("groups_assigned", 0)) for item in batch_payloads),
+        "groups_deferred": sum(int(item.get("summary", {}).get("groups_deferred", 0)) for item in batch_payloads),
+        "errors": sum(int(item.get("summary", {}).get("errors", 0)) for item in batch_payloads),
+    }
+    payload = {
+        "import_job_id": import_job_id,
+        "status": "completed" if all(item.get("status") == "success" for item in batch_payloads) else "partial",
+        "total": sum(int(item.get("total", 0)) for item in batch_payloads),
+        "success": sum(int(item.get("success", 0)) for item in batch_payloads),
+        "batch_results": batch_payloads,
+        "results": [entry for item in batch_payloads for entry in item.get("results", [])],
+        "summary": summary,
+        "diagnostics": diagnostics,
+        "current_batch": len(chunks),
+        "total_batches": len(chunks),
+        "global_progress": 100,
+    }
     return jsonify(payload)
 
 
@@ -2166,14 +2283,25 @@ def import_csv_stream() -> Any:
         return error
 
     rollback_on_error = str(request.form.get("rollback_on_error", "false")).lower() == "true"
+    resume_import_job_id = (request.form.get("resume_import_job_id") or "").strip()
     diagnostics = diagnose_environment()
     container = diagnostics.get("resolved_container", PASSBOLT_CONTAINER)
     cli_path = diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH)
 
     @stream_with_context
     def generate() -> Any:
-        _save_live_log("import", "info", f"Import stream started for {len(rows)} row(s)", event_code="import.stream.start")
-        yield json.dumps({"type": "log", "message": f"Import started for {len(rows)} row(s)"}, ensure_ascii=False) + "\n"
+        chunks = _chunk_rows(rows, IMPORT_BATCH_SIZE)
+        import_job_id = resume_import_job_id or str(uuid.uuid4())
+        start_batch = 1
+        if resume_import_job_id:
+            existing = list_batches_for_import_job(import_job_id)
+            failed_indexes = [int(item.get("batch_index") or 1) for item in existing if item.get("status") != "completed"]
+            if failed_indexes:
+                start_batch = min(failed_indexes)
+            elif existing:
+                start_batch = len(existing) + 1
+        _save_live_log("import", "info", f"Import stream started for {len(rows)} row(s)", event_code="import.stream.start", payload={"import_job_id": import_job_id, "total_batches": len(chunks), "resume_from_batch": start_batch})
+        yield json.dumps({"type": "log", "message": f"Import started for {len(rows)} row(s) · import_job_id={import_job_id}"}, ensure_ascii=False) + "\n"
         yield json.dumps({"type": "debug", "payload": diagnostics}, ensure_ascii=False) + "\n"
 
         event_queue: Queue[Any] = Queue()
@@ -2184,17 +2312,62 @@ def import_csv_stream() -> Any:
 
         def worker() -> None:
             try:
-                payload = _process_rows(
-                    rows,
-                    container,
-                    cli_path,
-                    rollback_on_error=rollback_on_error,
-                    source_filename=source_filename,
-                    emit=emit,
-                )
-                payload["diagnostics"] = diagnostics
-                _save_live_log("import", "info", "Import stream completed", batch_uuid=payload.get("batch_uuid"), event_code="import.stream.done", payload={"status": payload.get("status"), "total": payload.get("total")})
-                event_queue.put({"type": "final", "payload": payload})
+                batch_payloads: list[dict[str, Any]] = []
+                for index, chunk in enumerate(chunks, start=1):
+                    if index < start_batch:
+                        continue
+                    event_queue.put(
+                        {
+                            "type": "log",
+                            "message": f"Traitement batch {index}/{len(chunks)}",
+                        }
+                    )
+                    payload = _process_rows(
+                        chunk,
+                        container,
+                        cli_path,
+                        rollback_on_error=rollback_on_error,
+                        source_filename=source_filename,
+                        emit=emit,
+                        import_job_id=import_job_id,
+                        batch_index=index,
+                        total_batches=len(chunks),
+                    )
+                    batch_payloads.append(payload)
+                    event_queue.put(
+                        {
+                            "type": "progress",
+                            "payload": {
+                                "stage": "batch",
+                                "current_batch": index,
+                                "total_batches": len(chunks),
+                                "global_progress": round((index / max(len(chunks), 1)) * 100, 2),
+                            },
+                        }
+                    )
+                combined_results = [entry for item in batch_payloads for entry in item.get("results", [])]
+                summary = {
+                    "users_created": sum(int(item.get("summary", {}).get("users_created", 0)) for item in batch_payloads),
+                    "groups_created": sum(int(item.get("summary", {}).get("groups_created", 0)) for item in batch_payloads),
+                    "groups_assigned": sum(int(item.get("summary", {}).get("groups_assigned", 0)) for item in batch_payloads),
+                    "groups_deferred": sum(int(item.get("summary", {}).get("groups_deferred", 0)) for item in batch_payloads),
+                    "errors": sum(int(item.get("summary", {}).get("errors", 0)) for item in batch_payloads),
+                }
+                final_payload = {
+                    "import_job_id": import_job_id,
+                    "status": "completed" if all(item.get("status") == "success" for item in batch_payloads) else "partial",
+                    "total": sum(int(item.get("total", 0)) for item in batch_payloads),
+                    "success": sum(int(item.get("success", 0)) for item in batch_payloads),
+                    "results": combined_results,
+                    "batch_results": batch_payloads,
+                    "summary": summary,
+                    "diagnostics": diagnostics,
+                    "current_batch": len(chunks),
+                    "total_batches": len(chunks),
+                    "global_progress": 100,
+                }
+                _save_live_log("import", "info", "Import stream completed", event_code="import.stream.done", payload={"status": final_payload.get("status"), "total": final_payload.get("total"), "import_job_id": import_job_id, "total_batches": len(chunks)})
+                event_queue.put({"type": "final", "payload": final_payload})
             except Exception as error:
                 event_queue.put({"type": "stderr", "message": f"Import stream error: {error}"})
             finally:
@@ -2396,7 +2569,7 @@ def delete_last_import_users() -> Any:
 
     body = request.get_json(silent=True) or {}
     dry_run_only = bool(body.get("dry_run_only", False))
-    payload = process_delete_batch(latest["batch_uuid"], dry_run_only=dry_run_only)
+    payload = process_delete_import_job(str(latest["import_job_id"]), dry_run_only=dry_run_only)
     return jsonify(payload)
 
 
@@ -2404,19 +2577,24 @@ def delete_last_import_users() -> Any:
 def delete_batch_users() -> Any:
     body = request.get_json(silent=True) or {}
     batch_uuid = (body.get("batch_uuid") or "").strip()
+    import_job_id = (body.get("import_job_id") or "").strip()
+    target_import_job_id = import_job_id or batch_uuid
+    if target_import_job_id:
+        dry_run_only = bool(body.get("dry_run_only", False))
+        payload = process_delete_import_job(target_import_job_id, dry_run_only=dry_run_only)
+        if payload.get("error"):
+            return jsonify(payload), 404
+        return jsonify(payload)
     if not batch_uuid:
         return jsonify({"error": "batch_uuid is required"}), 400
-    dry_run_only = bool(body.get("dry_run_only", False))
-    payload = process_delete_batch(batch_uuid, dry_run_only=dry_run_only)
-    if payload.get("error"):
-        return jsonify(payload), 404
-    return jsonify(payload)
+    return jsonify({"error": "batch_uuid is required"}), 400
 
 
 @app.route("/delete-users-stream", methods=["POST"])
 def delete_users_stream() -> Any:
     body = request.get_json(silent=True) or {}
     batch_uuid = (body.get("batch_uuid") or "").strip()
+    import_job_id = (body.get("import_job_id") or "").strip()
     dry_run_only = _coerce_bool(body.get("dry_run_only"), False)
     ui_context = {
         "ui_dry_run_state": body.get("ui_dry_run_state"),
@@ -2426,11 +2604,11 @@ def delete_users_stream() -> Any:
         "has_deletable_status": body.get("has_deletable_status"),
     }
 
-    if not batch_uuid:
+    if not import_job_id and not batch_uuid:
         latest = get_last_import_batch()
         if not latest:
             return jsonify({"error": "no batch found"}), 404
-        batch_uuid = latest["batch_uuid"]
+        import_job_id = str(latest["import_job_id"])
 
     @stream_with_context
     def generate() -> Any:
@@ -2439,7 +2617,8 @@ def delete_users_stream() -> Any:
         def emit(event: dict[str, Any]) -> None:
             events.append(event)
 
-        payload = process_delete_batch(batch_uuid, dry_run_only=dry_run_only, emit=emit, ui_context=ui_context)
+        target_import_job_id = import_job_id or batch_uuid
+        payload = process_delete_import_job(target_import_job_id, dry_run_only=dry_run_only, emit=emit, ui_context=ui_context)
         for event in events:
             yield json.dumps(event, ensure_ascii=False) + "\n"
         yield json.dumps({"type": "final", "payload": payload}, ensure_ascii=False) + "\n"
@@ -2546,19 +2725,24 @@ def latest_batch() -> Any:
 
 @app.route("/batches/<batch_uuid>", methods=["GET"])
 def batch_details(batch_uuid: str) -> Any:
-    batch = get_batch(batch_uuid)
-    if not batch:
+    batches = list_batches_for_import_job(batch_uuid)
+    if not batches:
         return jsonify({"error": "batch not found"}), 404
-    return jsonify({"batch": batch, "users": get_batch_users(batch_uuid)})
+    users: list[dict[str, Any]] = []
+    for item in batches:
+        users.extend(get_batch_users(str(item.get("batch_uuid") or "")))
+    return jsonify({"batch": batches[0], "batches": batches, "users": users, "import_job_id": batch_uuid})
 
 
 @app.route("/batches/<batch_uuid>/deletable-users", methods=["GET"])
 def batch_deletable_users(batch_uuid: str) -> Any:
-    batch = get_batch(batch_uuid)
-    if not batch:
+    batches = list_batches_for_import_job(batch_uuid)
+    if not batches:
         return jsonify({"error": "batch not found"}), 404
-    users = get_batch_users(batch_uuid)
-    return jsonify({"batch_uuid": batch_uuid, "total": len(users), "items": users})
+    users: list[dict[str, Any]] = []
+    for item in batches:
+        users.extend(get_batch_users(str(item.get("batch_uuid") or "")))
+    return jsonify({"batch_uuid": batch_uuid, "import_job_id": batch_uuid, "total": len(users), "items": users})
 
 
 @app.route("/db/summary", methods=["GET"])

@@ -98,7 +98,11 @@ async function runImportFlow() {
         appendImportEventLine(event);
         if (event.type === 'progress') {
           const p = event.payload || {};
-          setImportProgress(p.percent || 0, p.stage || 'preview');
+          const percent = p.global_progress ?? p.percent ?? 0;
+          const stage = p.current_batch
+            ? `${p.stage || 'batch'} · ${p.current_batch}/${p.total_batches || '?'}`
+            : (p.stage || 'preview');
+          setImportProgress(percent, stage);
         }
         if (event.type === 'final') renderImportFinal(event.payload || {});
       }
@@ -141,7 +145,8 @@ function renderImportFinal(payload) {
     ['Groupes créés', s.groups_created || 0],
     ['Groupes assignés', s.groups_assigned || 0],
     ['Erreurs', s.errors || 0],
-    ['Batch', payload.batch_uuid || '-']
+    ['Import Job', payload.import_job_id || '-'],
+    ['Batchs', `${payload.current_batch || 0}/${payload.total_batches || 0}`]
   ];
   $('importSummaryCards').innerHTML = cards.map(([label, value]) => kpiCard(label, value)).join('');
   $('importResultsRows').innerHTML = state.latestImportResults.map((row) => {

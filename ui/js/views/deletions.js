@@ -198,7 +198,7 @@ export async function refreshDeleteConfig() {
     $('deleteApiMini').innerHTML = deleteApiConfigured
       ? statusChip('check', 'Configurée (diagnostic requis)')
       : statusChip('error', 'À configurer', deleteApiMessage);
-    $('deleteBatchSelect').innerHTML = `<option value="__latest__">Dernier import</option>${(batches.items || []).map((b) => `<option value="${escapeHtml(b.batch_uuid)}">${escapeHtml(b.batch_uuid)} — ${escapeHtml(b.filename || 'Sans fichier')}</option>`).join('')}`;
+    $('deleteBatchSelect').innerHTML = `<option value="__latest__">Dernier import</option>${(batches.items || []).map((b) => `<option value="${escapeHtml(b.import_job_id || b.batch_uuid)}">${escapeHtml(b.import_job_id || b.batch_uuid)} — ${escapeHtml(b.filename || 'Sans fichier')} (${b.completed_batches || 0}/${b.total_batches || 0})</option>`).join('')}`;
     updateBatchMini();
     refreshExecuteButtonState();
   } catch (e) {
@@ -214,7 +214,7 @@ async function runDeleteStream(previewOnly) {
   const effectiveDryRun = previewOnly ? true : dryRunState;
   const selected = $('deleteBatchSelect').value;
   const body = { dry_run_only: effectiveDryRun };
-  if (selected && selected !== '__latest__') body.batch_uuid = selected;
+  if (selected && selected !== '__latest__') body.import_job_id = selected;
   body.ui_dry_run_state = dryRunState;
   body.confirmation_checked = confirmationChecked;
   body.eligible_count = lastEligibleCount;
@@ -257,6 +257,9 @@ async function runDeleteStream(previewOnly) {
         if (!line.trim()) continue;
         const event = JSON.parse(line);
         if (['log', 'stderr', 'stdout'].includes(event.type)) appendTechLog(`${event.type.toUpperCase()} | ${event.message}`);
+        if (event.type === 'progress' && event.payload?.current_batch) {
+          appendTechLog(`PROGRESS | Batch ${event.payload.current_batch}/${event.payload.total_batches} · ${event.payload.delete_progress ?? event.payload.global_progress ?? 0}%`);
+        }
         if (event.type === 'final') {
           const payload = event.payload || {};
           appendTechLog(`FINAL | ${JSON.stringify({
